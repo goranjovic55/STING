@@ -1,0 +1,102 @@
+# skill.yaml - Debugging Skill Definition
+apiVersion: akis/v1
+kind: Skill
+metadata:
+  name: debugging
+  version: 2.0.0
+  description: Systematic debugging patterns, error analysis, gotcha lookup from 141 workflow logs
+  author: AKIS
+  tags: [debugging, errors, troubleshooting, gotchas]
+
+spec:
+  triggers:
+    files: []
+    keywords:
+      - "error"
+      - "traceback"
+      - "bug"
+      - "fix"
+      - "exception"
+      - "failed"
+    contexts:
+      - "debugging issue"
+      - "fixing bug"
+      - "error investigation"
+
+  dependencies:
+    required: []
+    optional:
+      - testing
+      - backend-api
+      - frontend-react
+
+  chains:
+    - trigger: "bug fixed"
+      load: [testing]
+
+  cache:
+    preload: false
+    priority: high
+    ttl: session
+
+  resources:
+    tokens: 290
+    patterns: 4
+    examples: 5
+
+  targets:
+    detection_rate: 0.94
+    false_positive_rate: 0.03
+    pattern_reuse_rate: 0.60
+
+gotchas:
+  - id: api-307-redirect
+    severity: error
+    pattern: "307"
+    check: "trailing slash"
+    message: "307 redirect on POST"
+    fix: "Add trailing slash to URL"
+
+  - id: stale-state
+    severity: warning
+    pattern: "state.*stale"
+    check: "version key"
+    message: "Persisted state stale"
+    fix: "Version storage key, clear cache"
+
+  - id: container-old-code
+    severity: error
+    pattern: "changes not visible"
+    check: "--build"
+    message: "Container running old code"
+    fix: "Use --build --force-recreate"
+
+rules:
+  - id: check-gotchas-first
+    description: "Check gotchas table before debugging (75% are known)"
+    enforce: true
+
+  - id: read-full-traceback
+    description: "Read entire error, not just first line"
+    enforce: true
+
+  - id: document-findings
+    description: "Add new gotchas to workflow log"
+    enforce: true
+
+patterns:
+  - name: jsonb-fix
+    file: patterns/templates/jsonb_fix.py.template
+    description: "JSONB mutation fix pattern"
+
+  - name: async-capture
+    file: patterns/templates/async_capture.tsx.template
+    description: "Async state capture pattern"
+
+  - name: error-boundary
+    file: patterns/templates/error_boundary.tsx.template
+    description: "Error boundary wrapper"
+
+  - name: container-debug
+    file: patterns/templates/container_debug.sh.template
+    description: "Container debugging commands"

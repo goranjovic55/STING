@@ -1,0 +1,104 @@
+# skill.yaml - Testing Skill Definition
+apiVersion: akis/v1
+kind: Skill
+metadata:
+  name: testing
+  version: 2.0.0
+  description: pytest, jest testing patterns for Python and TypeScript projects
+  author: AKIS
+  tags: [testing, pytest, jest, e2e, unit-tests]
+
+spec:
+  triggers:
+    files:
+      - "test_*.py"
+      - "*_test.py"
+      - "**/*.test.ts"
+      - "**/*.test.tsx"
+      - "**/tests/**/*"
+      - "conftest.py"
+    keywords:
+      - "test"
+      - "pytest"
+      - "jest"
+      - "assert"
+      - "expect"
+    contexts:
+      - "writing tests"
+      - "test coverage"
+      - "unit testing"
+
+  dependencies:
+    required: []
+    optional:
+      - backend-api
+      - frontend-react
+
+  chains: []
+
+  cache:
+    preload: false
+    priority: medium
+    ttl: session
+
+  resources:
+    tokens: 280
+    patterns: 4
+    examples: 4
+
+  targets:
+    detection_rate: 0.92
+    false_positive_rate: 0.04
+    pattern_reuse_rate: 0.55
+
+gotchas:
+  - id: async-fixture
+    severity: warning
+    pattern: "@pytest.fixture"
+    check: "async def"
+    message: "Fixture not async for async tests"
+    fix: "Use async def with @pytest.fixture"
+
+  - id: over-mocking
+    severity: warning
+    pattern: "mock"
+    check: "boundaries"
+    message: "Over-mocking hides real issues"
+    fix: "Only mock at service boundaries"
+
+  - id: flaky-test
+    severity: warning
+    pattern: "time.sleep"
+    check: "explicit wait"
+    message: "time.sleep causes flaky tests"
+    fix: "Use explicit waits, not sleep()"
+
+rules:
+  - id: test-behavior
+    description: "Test what it does, not how"
+    enforce: true
+
+  - id: isolate-tests
+    description: "No shared state between tests"
+    enforce: true
+
+  - id: mock-boundaries
+    description: "Mock external services, not internal logic"
+    enforce: true
+
+patterns:
+  - name: api-test
+    file: patterns/templates/api_test.py.template
+    description: "API test with async client"
+
+  - name: async-fixture
+    file: patterns/templates/async_fixture.py.template
+    description: "Async fixture template"
+
+  - name: component-test
+    file: patterns/templates/component_test.tsx.template
+    description: "React component test"
+
+  - name: e2e-test
+    file: patterns/templates/e2e_test.py.template
+    description: "E2E test with full flow"

@@ -1,0 +1,90 @@
+# skill.yaml - CI/CD Skill Definition
+apiVersion: akis/v1
+kind: Skill
+metadata:
+  name: ci-cd
+  version: 2.0.0
+  description: GitHub Actions workflows, deployment pipelines, automation
+  author: AKIS
+  tags: [ci-cd, github-actions, workflows, deployment]
+
+spec:
+  triggers:
+    files:
+      - ".github/workflows/*.yml"
+      - ".github/workflows/*.yaml"
+      - "deploy*.sh"
+    keywords:
+      - "workflow"
+      - "pipeline"
+      - "deploy"
+      - "github actions"
+    contexts:
+      - "ci/cd configuration"
+      - "workflow setup"
+      - "deployment automation"
+
+  dependencies:
+    required: []
+    optional:
+      - docker
+
+  chains:
+    - trigger: "deploy"
+      load: [docker]
+
+  cache:
+    preload: false
+    priority: low
+    ttl: session
+
+  resources:
+    tokens: 230
+    patterns: 4
+    examples: 2
+
+  targets:
+    detection_rate: 0.91
+    false_positive_rate: 0.03
+    pattern_reuse_rate: 0.50
+
+gotchas:
+  - id: missing-name
+    severity: warning
+    pattern: "jobs:"
+    check: "name:"
+    message: "Workflow missing name"
+    fix: "Add name: at top of workflow"
+
+  - id: missing-trigger
+    severity: error
+    pattern: "jobs:"
+    check: "on:"
+    message: "Workflow missing trigger"
+    fix: "Add on: section with triggers"
+
+rules:
+  - id: workflow-name
+    description: "Every workflow needs a name"
+    enforce: true
+
+  - id: trigger-defined
+    description: "Define on: triggers explicitly"
+    enforce: true
+
+patterns:
+  - name: build-workflow
+    file: patterns/templates/build_workflow.yml.template
+    description: "Build pipeline"
+
+  - name: test-workflow
+    file: patterns/templates/test_workflow.yml.template
+    description: "Test pipeline"
+
+  - name: deploy-workflow
+    file: patterns/templates/deploy_workflow.yml.template
+    description: "Deploy pipeline"
+
+  - name: pr-checks
+    file: patterns/templates/pr_checks.yml.template
+    description: "PR validation"

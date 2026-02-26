@@ -1,0 +1,90 @@
+# skill.yaml - Planning Skill Definition
+apiVersion: akis/v1
+kind: Skill
+metadata:
+  name: planning
+  version: 2.0.0
+  description: Feature planning, architecture decisions, blueprint creation
+  author: AKIS
+  tags: [planning, architecture, design, blueprint]
+
+spec:
+  triggers:
+    files:
+      - ".project/**/*"
+      - "**/blueprint*.md"
+    keywords:
+      - "plan"
+      - "design"
+      - "blueprint"
+      - "architecture"
+      - "feature"
+    contexts:
+      - "planning feature"
+      - "architecture decision"
+      - "new feature design"
+
+  dependencies:
+    required: []
+    optional:
+      - research
+
+  chains:
+    - trigger: "new feature"
+      load: [research]
+
+  cache:
+    preload: false
+    priority: low
+    ttl: session
+
+  resources:
+    tokens: 220
+    patterns: 4
+    examples: 2
+
+  targets:
+    detection_rate: 0.90
+    false_positive_rate: 0.04
+    pattern_reuse_rate: 0.50
+
+gotchas:
+  - id: scope-creep
+    severity: warning
+    pattern: "also|additionally"
+    check: "IN/OUT"
+    message: "Potential scope creep"
+    fix: "Clearly define IN/OUT boundaries"
+
+  - id: missing-tasks
+    severity: warning
+    pattern: "## Design"
+    check: "## Tasks"
+    message: "Blueprint missing tasks section"
+    fix: "Add ## Tasks with actionable items"
+
+rules:
+  - id: blueprint-structure
+    description: "Scope → Design → Tasks"
+    enforce: true
+
+  - id: task-limit
+    description: "Tasks should be <3 files each"
+    enforce: true
+
+patterns:
+  - name: blueprint
+    file: patterns/templates/blueprint.md.template
+    description: "Feature blueprint template"
+
+  - name: scope-definition
+    file: patterns/templates/scope_definition.md.template
+    description: "Scope boundaries"
+
+  - name: task-decomposition
+    file: patterns/templates/task_decomposition.md.template
+    description: "Task breakdown"
+
+  - name: handoff-template
+    file: patterns/templates/handoff_template.md.template
+    description: "Agent handoff"

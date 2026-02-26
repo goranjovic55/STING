@@ -1,0 +1,115 @@
+# skill.yaml - Session Management Skill Definition
+apiVersion: akis/v1
+kind: Skill
+metadata:
+  name: session
+  version: 1.0.0
+  description: Session lifecycle management, TODO tracking, phase transitions, cleanup
+  author: AKIS
+  tags: [session, workflow, todo, lifecycle, gates]
+
+spec:
+  triggers:
+    files:
+      - ".github/.session-tracker.json"
+      - "log/workflow/*.md"
+    keywords:
+      - "session"
+      - "TODO"
+      - "START"
+      - "END"
+      - "phase"
+      - "gate"
+      - "workflow"
+    contexts:
+      - "session management"
+      - "workflow phase"
+      - "TODO tracking"
+      - "session cleanup"
+
+  dependencies:
+    required: []
+    optional:
+      - knowledge
+
+  chains:
+    - trigger: "session end"
+      load: [knowledge]
+
+  cache:
+    preload: true
+    priority: high
+    ttl: session
+
+  resources:
+    tokens: 200
+    patterns: 4
+    examples: 2
+
+  targets:
+    detection_rate: 0.92
+    false_positive_rate: 0.03
+    pattern_reuse_rate: 0.45
+
+gotchas:
+  - id: orphan-todo
+    severity: warning
+    pattern: "◆"
+    check: "✓"
+    message: "TODO left in working state"
+    fix: "Mark ✓ or ⊘ before END"
+
+  - id: skip-start
+    severity: error
+    pattern: "edit"
+    check: "START"
+    message: "Editing without START phase"
+    fix: "Complete START phase first"
+
+  - id: multi-active
+    severity: warning
+    pattern: "◆.*◆"
+    check: "one only"
+    message: "Multiple active TODOs"
+    fix: "Only ONE ◆ at a time (G6)"
+
+  - id: skip-cleanup
+    severity: warning
+    pattern: "END"
+    check: "cleanup"
+    message: "Session ended without cleanup"
+    fix: "Run session_cleanup.py in END"
+
+rules:
+  - id: start-before-work
+    description: "Complete START phase before any edits"
+    enforce: true
+
+  - id: one-active-todo
+    description: "Only one ◆ active at a time (G6)"
+    enforce: true
+
+  - id: close-all-todos
+    description: "All ◆ marked ✓ or ⊘ before END"
+    enforce: true
+
+  - id: cleanup-at-end
+    description: "Run cleanup during END phase"
+    enforce: true
+
+patterns:
+  - name: start-phase
+    file: patterns/templates/start_phase.md.template
+    description: "START phase checklist"
+
+  - name: end-phase
+    file: patterns/templates/end_phase.md.template
+    description: "END phase checklist"
+
+  - name: todo-format
+    file: patterns/templates/todo_format.md.template
+    description: "Structured TODO naming"
+
+  - name: workflow-log
+    file: patterns/templates/workflow_log.md.template
+    description: "Workflow log template"

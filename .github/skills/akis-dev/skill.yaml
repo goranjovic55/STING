@@ -1,0 +1,101 @@
+# skill.yaml - AKIS Development Skill Definition
+apiVersion: akis/v1
+kind: Skill
+metadata:
+  name: akis-dev
+  version: 2.0.0
+  description: AKIS framework development, skills, agents, instructions patterns
+  author: AKIS
+  tags: [akis, framework, skills, agents, instructions]
+
+spec:
+  triggers:
+    files:
+      - ".github/copilot-instructions*.md"
+      - ".github/skills/**/*"
+      - ".github/agents/**/*"
+      - ".github/instructions/**/*"
+      - "project_knowledge.json"
+    keywords:
+      - "akis"
+      - "skill"
+      - "agent"
+      - "instruction"
+    contexts:
+      - "akis development"
+      - "creating skill"
+      - "framework modification"
+
+  dependencies:
+    required: []
+    optional:
+      - documentation
+
+  chains: []
+
+  cache:
+    preload: false
+    priority: high
+    ttl: session
+
+  resources:
+    tokens: 290
+    patterns: 4
+    examples: 3
+
+  targets:
+    detection_rate: 0.93
+    false_positive_rate: 0.03
+    pattern_reuse_rate: 0.60
+
+gotchas:
+  - id: duplicate-content
+    severity: warning
+    pattern: "same table"
+    check: "single source"
+    message: "Content duplicated across files"
+    fix: "Keep in ONE file, reference from others"
+
+  - id: missing-frontmatter
+    severity: error
+    pattern: "^# "
+    check: "---"
+    message: "SKILL.md missing YAML frontmatter"
+    fix: "Add --- frontmatter at top"
+
+  - id: verbose-content
+    severity: warning
+    pattern: "paragraph"
+    check: "table"
+    message: "Verbose prose instead of table"
+    fix: "Convert to table format"
+
+rules:
+  - id: single-source
+    description: "Each rule exists in ONE file only"
+    enforce: true
+
+  - id: tables-over-prose
+    description: "Tables instead of paragraphs"
+    enforce: true
+
+  - id: minimal-tokens
+    description: "Optimize for token efficiency"
+    enforce: true
+
+patterns:
+  - name: skill-template
+    file: patterns/templates/skill_template.md.template
+    description: "New skill structure"
+
+  - name: agent-template
+    file: patterns/templates/agent_template.md.template
+    description: "Agent definition"
+
+  - name: instruction-template
+    file: patterns/templates/instruction_template.md.template
+    description: "Instructions file"
+
+  - name: knowledge-entry
+    file: patterns/templates/knowledge_entry.json.template
+    description: "Knowledge graph entry"

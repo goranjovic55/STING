@@ -1,0 +1,102 @@
+# skill.yaml - Docker Skill Definition
+apiVersion: akis/v1
+kind: Skill
+metadata:
+  name: docker
+  version: 2.0.0
+  description: Container management, Docker Compose orchestration for dev/prod environments
+  author: AKIS
+  tags: [docker, containers, compose, devops]
+
+spec:
+  triggers:
+    files:
+      - "Dockerfile"
+      - "docker-compose*.yml"
+      - "docker/**/*"
+      - ".dockerignore"
+    keywords:
+      - "docker"
+      - "container"
+      - "compose"
+      - "build"
+    contexts:
+      - "container management"
+      - "docker configuration"
+      - "deployment"
+
+  dependencies:
+    required: []
+    optional:
+      - ci-cd
+
+  chains:
+    - trigger: "deploy"
+      load: [ci-cd]
+
+  cache:
+    preload: false
+    priority: medium
+    ttl: session
+
+  resources:
+    tokens: 240
+    patterns: 4
+    examples: 2
+
+  targets:
+    detection_rate: 0.94
+    false_positive_rate: 0.02
+    pattern_reuse_rate: 0.48
+
+gotchas:
+  - id: restart-not-rebuild
+    severity: error
+    pattern: "restart"
+    check: "up -d --build"
+    message: "restart keeps old code"
+    fix: "Use up -d --build instead"
+
+  - id: cache-issues
+    severity: warning
+    pattern: "changes not appearing"
+    check: "--force-recreate"
+    message: "Cache preventing updates"
+    fix: "Add --force-recreate flag"
+
+  - id: wrong-compose-file
+    severity: error
+    pattern: "docker-compose up"
+    check: "docker-compose.dev.yml"
+    message: "Using prod compose for dev"
+    fix: "Use docker-compose.dev.yml for local"
+
+rules:
+  - id: dev-compose
+    description: "Always use docker-compose.dev.yml for local development"
+    enforce: true
+
+  - id: rebuild-after-code
+    description: "up -d --build not restart"
+    enforce: true
+
+  - id: check-logs-first
+    description: "docker compose logs -f {service} before debugging"
+    enforce: true
+
+patterns:
+  - name: dev-startup
+    file: patterns/templates/dev_startup.sh.template
+    description: "Development startup command"
+
+  - name: rebuild-service
+    file: patterns/templates/rebuild_service.sh.template
+    description: "Rebuild single service"
+
+  - name: force-recreate
+    file: patterns/templates/force_recreate.sh.template
+    description: "Force full recreate"
+
+  - name: clean-rebuild
+    file: patterns/templates/clean_rebuild.sh.template
+    description: "Clean rebuild with no cache"

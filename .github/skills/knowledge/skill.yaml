@@ -1,0 +1,123 @@
+# skill.yaml - Knowledge Skill Definition
+apiVersion: akis/v1
+kind: Skill
+metadata:
+  name: knowledge
+  version: 2.1.0
+  description: Project knowledge querying using JSONL format, architecture lookup, gotcha checks, and knowledge maintenance
+  author: AKIS
+  tags: [knowledge, graph, context, caching, architecture, gotchas, query, jsonl]
+
+spec:
+  format: jsonl  # One JSON object per line
+  file: project_knowledge.json
+  
+  structure:
+    line_1: hot_cache      # Top 30 entities + entity_refs, quick_facts
+    line_2: domain_index   # 90 backend, 77 frontend file paths
+    line_3: change_tracking # File hashes for staleness detection
+    line_4: gotchas        # 30+ historical issues + solutions
+    line_5: interconnections # Entity chains for context recovery
+    line_6: session_patterns # Predictive entity loading hints
+    line_7_plus: entities_and_relations # Individual entity/relation objects
+
+  triggers:
+    files:
+      - "project_knowledge.json"
+      - "log/workflow/*.md"
+    keywords:
+      - "knowledge"
+      - "architecture"
+      - "structure"
+      - "gotcha"
+      - "entity"
+      - "where is"
+      - "how does"
+      - "what file"
+      - "find"
+      - "locate"
+      - "path"
+    contexts:
+      - "project knowledge"
+      - "architecture lookup"
+      - "code structure"
+      - "debugging gotchas"
+      - "entity tracking"
+      - "file location"
+      - "querying project"
+
+  dependencies:
+    required: []
+    optional:
+      - debugging
+
+  chains:
+    - trigger: "debugging"
+      load: [debugging]
+
+  cache:
+    preload: true
+    priority: high
+    ttl: session
+
+  resources:
+    tokens: 300
+    patterns: 4
+    examples: 3
+
+  targets:
+    detection_rate: 0.90
+    false_positive_rate: 0.04
+    pattern_reuse_rate: 0.50
+
+gotchas:
+  - id: skip-query
+    severity: warning
+    pattern: "grep|find|list_dir"
+    check: "knowledge first"
+    message: "Searching without querying knowledge first"
+    fix: "Check hot_cache/domain_index before file operations"
+
+  - id: invalid-json
+    severity: error
+    pattern: "project_knowledge.json"
+    check: "json.loads"
+    message: "Invalid JSON in knowledge file"
+    fix: "Validate JSON syntax"
+
+  - id: missing-version
+    severity: warning
+    pattern: "type"
+    check: "version"
+    message: "Missing version field"
+    fix: "Add version field"
+
+rules:
+  - id: query-first
+    description: "Query knowledge before grep/find/list_dir"
+    enforce: true
+
+  - id: valid-json
+    description: "Knowledge file must be valid JSON"
+    enforce: true
+
+  - id: hot-cache-first
+    description: "Query hot cache before full search"
+    enforce: true
+
+patterns:
+  - name: entity-template
+    file: patterns/templates/entity_template.json.template
+    description: "Entity definition"
+
+  - name: relation-template
+    file: patterns/templates/relation_template.json.template
+    description: "Relation definition"
+
+  - name: query-pattern
+    file: patterns/templates/query_pattern.py.template
+    description: "Graph query"
+
+  - name: cache-update
+    file: patterns/templates/cache_update.py.template
+    description: "Cache management"

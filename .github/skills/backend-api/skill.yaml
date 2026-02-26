@@ -1,0 +1,109 @@
+# skill.yaml - Backend API Skill Definition
+apiVersion: akis/v1
+kind: Skill
+metadata:
+  name: backend-api
+  version: 2.0.0
+  description: FastAPI, async SQLAlchemy, WebSocket, Authentication patterns
+  author: AKIS
+  tags: [python, api, backend, fastapi, sqlalchemy, websocket]
+
+spec:
+  triggers:
+    files:
+      - "backend/**/*.py"
+      - "api/**/*.py"
+      - "**/*_service.py"
+      - "**/routes/*.py"
+      - "**/services/*.py"
+      - "**/models/*.py"
+      - "alembic/**/*.py"
+    keywords:
+      - "fastapi"
+      - "endpoint"
+      - "api"
+      - "router"
+      - "sqlalchemy"
+    contexts:
+      - "implementing api"
+      - "backend development"
+      - "database operations"
+
+  dependencies:
+    required: []
+    optional:
+      - testing
+      - security
+
+  chains:
+    - trigger: "new endpoint"
+      load: [testing]
+    - trigger: "authentication"
+      load: [security]
+
+  cache:
+    preload: true
+    priority: high
+    ttl: session
+
+  resources:
+    tokens: 350
+    patterns: 5
+    examples: 3
+
+  targets:
+    detection_rate: 0.95
+    false_positive_rate: 0.03
+    pattern_reuse_rate: 0.50
+
+gotchas:
+  - id: jsonb-mutation
+    severity: critical
+    pattern: "agent_metadata\\["
+    check: "flag_modified"
+    message: "JSONB mutation without flag_modified()"
+    fix: "Add flag_modified(obj, 'field') before commit"
+
+  - id: sync-db-call
+    severity: error
+    pattern: "\\.execute\\("
+    check: "await"
+    message: "Sync DB call in async context"
+    fix: "Add await before execute()"
+
+  - id: missing-response-model
+    severity: warning
+    pattern: "@router\\.(get|post|put|delete)\\("
+    check: "response_model"
+    message: "Endpoint missing response_model"
+    fix: "Add response_model=Schema parameter"
+
+rules:
+  - id: layer-separation
+    description: "Endpoint → Service → Model"
+    enforce: true
+
+  - id: type-safety
+    description: "Always use response_model=Schema"
+    enforce: true
+
+  - id: async-io
+    description: "await all DB/network calls"
+    enforce: true
+
+patterns:
+  - name: crud-endpoint
+    file: patterns/templates/crud_endpoint.py.template
+    description: "CRUD endpoint with proper typing"
+
+  - name: service-layer
+    file: patterns/templates/service_layer.py.template
+    description: "Service class for business logic"
+
+  - name: websocket-handler
+    file: patterns/templates/websocket_handler.py.template
+    description: "WebSocket with disconnect handling"
+
+  - name: jsonb-mutation
+    file: patterns/templates/jsonb_mutation.py.template
+    description: "JSONB field update with flag_modified"

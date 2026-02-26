@@ -1,0 +1,102 @@
+# skill.yaml - Security Skill Definition
+apiVersion: akis/v1
+kind: Skill
+metadata:
+  name: security
+  version: 2.0.0
+  description: Security auditing, vulnerability prevention, OWASP compliance
+  author: AKIS
+  tags: [security, vulnerabilities, owasp, authentication]
+
+spec:
+  triggers:
+    files:
+      - "**/auth/**/*"
+      - "**/security/**/*"
+    keywords:
+      - "security"
+      - "vulnerability"
+      - "injection"
+      - "xss"
+      - "csrf"
+      - "authentication"
+    contexts:
+      - "security review"
+      - "vulnerability check"
+      - "authentication implementation"
+
+  dependencies:
+    required: []
+    optional:
+      - backend-api
+
+  chains:
+    - trigger: "auth"
+      load: [backend-api]
+
+  cache:
+    preload: false
+    priority: medium
+    ttl: session
+
+  resources:
+    tokens: 270
+    patterns: 4
+    examples: 3
+
+  targets:
+    detection_rate: 0.89
+    false_positive_rate: 0.04
+    pattern_reuse_rate: 0.52
+
+gotchas:
+  - id: sql-injection
+    severity: critical
+    pattern: "f[\"'].*SELECT"
+    check: "parameterized"
+    message: "Possible SQL injection"
+    fix: "Use parameterized queries"
+
+  - id: eval-exec
+    severity: critical
+    pattern: "(eval|exec)\\("
+    check: "avoid"
+    message: "Code injection risk with eval/exec"
+    fix: "Avoid eval/exec entirely"
+
+  - id: hardcoded-secret
+    severity: error
+    pattern: "(password|secret|api_key)\\s*="
+    check: "os.environ"
+    message: "Possible hardcoded secret"
+    fix: "Use environment variables"
+
+rules:
+  - id: parameterized-queries
+    description: "Always use parameterized queries"
+    enforce: true
+
+  - id: env-secrets
+    description: "Secrets from environment variables only"
+    enforce: true
+
+  - id: input-sanitization
+    description: "Sanitize all user inputs"
+    enforce: true
+
+patterns:
+  - name: input-sanitization
+    file: patterns/templates/input_sanitization.py.template
+    description: "Input validation"
+
+  - name: auth-check
+    file: patterns/templates/auth_check.py.template
+    description: "Authentication check"
+
+  - name: cors-config
+    file: patterns/templates/cors_config.py.template
+    description: "CORS configuration"
+
+  - name: sql-parameterized
+    file: patterns/templates/sql_parameterized.py.template
+    description: "Parameterized query"

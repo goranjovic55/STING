@@ -1,0 +1,96 @@
+# skill.yaml - Research Skill Definition
+apiVersion: akis/v1
+kind: Skill
+metadata:
+  name: research
+  version: 2.0.0
+  description: Standards investigation, best practices gathering, local-first research
+  author: AKIS
+  tags: [research, standards, best-practices, comparison]
+
+spec:
+  triggers:
+    files: []
+    keywords:
+      - "research"
+      - "best practice"
+      - "standard"
+      - "compare"
+      - "investigate"
+    contexts:
+      - "researching standards"
+      - "comparing approaches"
+      - "best practices"
+
+  dependencies:
+    required: []
+    optional: []
+
+  chains: []
+
+  cache:
+    preload: false
+    priority: low
+    ttl: session
+
+  resources:
+    tokens: 210
+    patterns: 4
+    examples: 2
+
+  targets:
+    detection_rate: 0.88
+    false_positive_rate: 0.05
+    pattern_reuse_rate: 0.45
+
+gotchas:
+  - id: external-first
+    severity: warning
+    pattern: "search web"
+    check: "local first"
+    message: "Searching web before local"
+    fix: "Check docs/ + codebase FIRST"
+
+  - id: time-sink
+    severity: warning
+    pattern: "research"
+    check: "time box"
+    message: "Research taking >5 min per topic"
+    fix: "Time box strictly, move on"
+
+  - id: lost-findings
+    severity: error
+    pattern: "findings"
+    check: "documented"
+    message: "Research not documented"
+    fix: "Cache findings in blueprint"
+
+rules:
+  - id: local-first
+    description: "grep docs/ + codebase before external search"
+    enforce: true
+
+  - id: time-box
+    description: "Keep research <5 min per topic"
+    enforce: true
+
+  - id: synthesize
+    description: "Return actionable recommendation, not raw data"
+    enforce: true
+
+patterns:
+  - name: research-output
+    file: patterns/templates/research_output.md.template
+    description: "Research findings format"
+
+  - name: comparison-table
+    file: patterns/templates/comparison_table.md.template
+    description: "Alternative comparison"
+
+  - name: recommendation
+    file: patterns/templates/recommendation.md.template
+    description: "Final recommendation"
+
+  - name: source-citation
+    file: patterns/templates/source_citation.md.template
+    description: "Source tracking"

@@ -1,0 +1,89 @@
+# skill.yaml - Documentation Skill Definition
+apiVersion: akis/v1
+kind: Skill
+metadata:
+  name: documentation
+  version: 2.0.0
+  description: README, API docs, technical documentation patterns
+  author: AKIS
+  tags: [documentation, markdown, readme, api-docs]
+
+spec:
+  triggers:
+    files:
+      - "**/*.md"
+      - "docs/**/*"
+      - "README*"
+      - "CHANGELOG*"
+      - "CONTRIBUTING*"
+    keywords:
+      - "document"
+      - "readme"
+      - "docs"
+      - "changelog"
+    contexts:
+      - "writing documentation"
+      - "updating readme"
+      - "api documentation"
+
+  dependencies:
+    required: []
+    optional: []
+
+  chains: []
+
+  cache:
+    preload: false
+    priority: low
+    ttl: session
+
+  resources:
+    tokens: 260
+    patterns: 4
+    examples: 2
+
+  targets:
+    detection_rate: 0.93
+    false_positive_rate: 0.02
+    pattern_reuse_rate: 0.42
+
+gotchas:
+  - id: missing-heading
+    severity: warning
+    pattern: "^[^#]"
+    check: "# "
+    message: "Document missing main heading"
+    fix: "Start with # Title"
+
+  - id: broken-links
+    severity: error
+    pattern: "\\]\\("
+    check: "exists"
+    message: "Potential broken link"
+    fix: "Verify linked files exist"
+
+rules:
+  - id: main-heading
+    description: "Every doc starts with # Title"
+    enforce: true
+
+  - id: sections
+    description: "README should have ## subsections"
+    enforce: true
+
+patterns:
+  - name: readme-template
+    file: patterns/templates/readme_template.md.template
+    description: "README structure"
+
+  - name: api-doc
+    file: patterns/templates/api_doc.md.template
+    description: "API documentation"
+
+  - name: changelog-entry
+    file: patterns/templates/changelog_entry.md.template
+    description: "Changelog format"
+
+  - name: architecture-doc
+    file: patterns/templates/architecture_doc.md.template
+    description: "Architecture docs"

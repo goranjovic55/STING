@@ -1,50 +1,42 @@
-# AKIS Framework v8.0
+# AKIS v7.4 - Agent Knowledge & Instruction System
 
-**Adaptive Knowledge Intelligence System** for development standardization.
+AI coding agent framework: **A**gent • **K**nowledge • **I**nstructions • **S**kills
+
+**Portable:** Copy `.github/` to any codebase.
 
 ## Structure
 
-### .github/ (Version Control & CI/CD)
-- `agents/` - AI agent definitions (*.agent.md)
-- `skills/` - Reusable skill modules with INDEX.md
-- `workflows/` - GitHub Actions CI/CD
-- `templates/` - Project templates
-- `prompts/` - Standard prompts
-- `instructions/` - Development instructions
-- `scripts/` - AKIS maintenance automation
+| File | Purpose |
+|------|--------|
+| `copilot-instructions.md` | Terse rules (START→WORK→END) |
+| `instructions/protocols.instructions.md` | Gates, skill triggers, delegation |
+| `instructions/architecture.instructions.md` | Project structure & file placement |
+| `instructions/workflow.instructions.md` | Phases, TODO, END steps |
+| `instructions/quality.instructions.md` | Verification, gotchas |
+| `skills/INDEX.md` | Domain→skill lookup |
+| `skills/*/SKILL.md` | Agent Skills (per-domain) |
+| `agents/*.agent.md` | Custom agents (8 total) |
+| `scripts/*.py` | Codemap, skill suggestions |
+| `templates/*.md` | Workflow log, skill, agent templates |
 
-### .claude/ (Claude Code Config)
-- `settings.json` - Permissions, env vars, model config
+## Key Scripts
 
-### .project/ (Project Management)
-- `agents/` - Project-specific agent overrides
-- `blueprints/` - Design documents (created BEFORE code)
-- `proposals/` - Feature proposals
-- `skills/` - Project-specific skills
-- `automation-flows/` - Workflow automation
-
-### project_knowledge.json
-Knowledge graph with:
-- `hot_cache` - Top 30 entities for instant context
-- `domain_index` - Per-domain entity lookup
-- `gotchas` - Historical issues + solutions
-- `interconnections` - Entity dependency chains
+```bash
+python .github/scripts/knowledge.py      # Update knowledge (--update, --generate, --suggest)
+python .github/scripts/skills.py         # Skill management (--update, --generate, --suggest)
+python .github/scripts/instructions.py   # Instruction optimization
+python .github/scripts/docs.py           # Documentation updates
+python .github/scripts/agents.py         # Agent management
+python .github/scripts/session_cleanup.py # Session cleanup
+```
 
 ## Usage
 
-### VSCode
-Standard VSCode workflow with GitHub Copilot.
+1. Agent reads `copilot-instructions.md` at session start
+2. Follows START→WORK→END phases
+3. Loads skills from `skills/` when touching relevant files
+4. At END: runs scripts, creates workflow log
 
-### Claude Code
-Loads AKIS from `.github/agents/` and `.claude/settings.json`.
+---
 
-### OpenClaw
-Can invoke agents via `.github/agents/*.agent.md` definitions.
-
-## Standards
-
-1. **Design before code** - Blueprints in `.project/blueprints/`
-2. **Max 7 components** - Cognitive limit compliance
-3. **Document gotchas** - Update `project_knowledge.json`
-4. **Test coverage** - Required for CI/CD
-5. **Agent trace** - All agents return structured output
+*Context over Process. Knowledge over Ceremony.*

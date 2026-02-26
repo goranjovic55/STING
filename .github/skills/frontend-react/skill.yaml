@@ -1,0 +1,105 @@
+# skill.yaml - Frontend React Skill Definition
+apiVersion: akis/v1
+kind: Skill
+metadata:
+  name: frontend-react
+  version: 2.0.0
+  description: React, TypeScript, Zustand state management, WebSocket client patterns
+  author: AKIS
+  tags: [typescript, react, frontend, zustand, websocket]
+
+spec:
+  triggers:
+    files:
+      - "frontend/**/*.tsx"
+      - "frontend/**/*.jsx"
+      - "**/components/**/*.tsx"
+      - "**/pages/**/*.tsx"
+      - "**/store/**/*.ts"
+      - "**/hooks/**/*.ts"
+    keywords:
+      - "react"
+      - "component"
+      - "useState"
+      - "zustand"
+      - "tsx"
+    contexts:
+      - "frontend development"
+      - "react component"
+      - "ui implementation"
+
+  dependencies:
+    required: []
+    optional:
+      - testing
+
+  chains:
+    - trigger: "new component"
+      load: [testing]
+
+  cache:
+    preload: true
+    priority: high
+    ttl: session
+
+  resources:
+    tokens: 320
+    patterns: 4
+    examples: 3
+
+  targets:
+    detection_rate: 0.96
+    false_positive_rate: 0.02
+    pattern_reuse_rate: 0.55
+
+gotchas:
+  - id: jsx-comment
+    severity: error
+    pattern: "^\\s*//.*$"
+    check: "{/*"
+    message: "Wrong comment syntax in JSX"
+    fix: "Use {/* comment */} not // in JSX"
+
+  - id: stale-closure
+    severity: warning
+    pattern: "async\\s*\\(\\)\\s*=>\\s*\\{[^}]*set[A-Z]"
+    check: "capturedState"
+    message: "Potential stale closure in async handler"
+    fix: "Capture state before async call"
+
+  - id: missing-key
+    severity: warning
+    pattern: "\\.map\\s*\\("
+    check: "key="
+    message: "Array.map() missing key prop"
+    fix: "Add key={item.id} to mapped elements"
+
+rules:
+  - id: component-pattern
+    description: "FC<Props> with typed props"
+    enforce: true
+
+  - id: state-management
+    description: "Use Zustand selectors to prevent re-renders"
+    enforce: true
+
+  - id: auth-storage
+    description: "Use nop-auth key for localStorage"
+    enforce: true
+
+patterns:
+  - name: component
+    file: patterns/templates/component.tsx.template
+    description: "Functional component with typed props"
+
+  - name: zustand-store
+    file: patterns/templates/zustand_store.ts.template
+    description: "Zustand store with persistence"
+
+  - name: async-handler
+    file: patterns/templates/async_handler.tsx.template
+    description: "Async handler with state capture"
+
+  - name: auth-aware
+    file: patterns/templates/auth_aware.tsx.template
+    description: "Auth-aware API call pattern"

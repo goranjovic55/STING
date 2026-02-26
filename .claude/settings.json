@@ -2,11 +2,8 @@
     "permissions": {
         "allow": [
             "Bash(pip install:*)",
-            "Bash(go mod tidy:*)",
             "Bash(apt-get update:*)",
             "Bash(apt-get install:*)",
-            "Bash(go version:*)",
-            "Bash(go build:*)",
             "Bash(git config:*)",
             "Bash(git init:*)",
             "Bash(git add:*)",
@@ -15,8 +12,7 @@
             "Bash(python3:*)",
             "Bash(git push)",
             "Bash(find:*)",
-            "Bash(tmux:*)",
-            "Bash(tmux attach:*)"
+            "Bash(pytest:*)"
         ],
         "defaultMode": "dontAsk"
     },
