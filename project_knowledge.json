@@ -1,0 +1,3 @@
+{"type": "hot_cache", "version": "1.0", "generated": "2026-02-26", "description": "Honeypot Intelligence Pipeline knowledge graph", "top_entities": ["main", "parser", "analyzer", "storage", "alerter"], "entity_refs": {"main": "src/main.py", "parser": "src/parser.py", "analyzer": "src/analyzer.py", "storage": "src/storage.py", "alerter": "src/alerter.py"}}
+{"type": "domain_index", "description": "Per-domain entity indexes", "python": ["src/main.py", "src/parser.py", "src/analyzer.py", "src/storage.py", "src/alerter.py"], "config": ["config/pipeline.json"], "scripts": ["scripts/cron.sh"]}
+{"type": "gotchas", "version": "1.0", "description": "Historical issues + solutions", "issues": {}}

@@ -1,0 +1,30 @@
+{
+    "permissions": {
+        "allow": [
+            "Bash(pip install:*)",
+            "Bash(go mod tidy:*)",
+            "Bash(apt-get update:*)",
+            "Bash(apt-get install:*)",
+            "Bash(go version:*)",
+            "Bash(go build:*)",
+            "Bash(git config:*)",
+            "Bash(git init:*)",
+            "Bash(git add:*)",
+            "Bash(git commit:*)",
+            "Bash(pip3 install:*)",
+            "Bash(python3:*)",
+            "Bash(git push)",
+            "Bash(find:*)",
+            "Bash(tmux:*)",
+            "Bash(tmux attach:*)"
+        ],
+        "defaultMode": "dontAsk"
+    },
+    "env": {
+        "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
+        "ANTHROPIC_AUTH_TOKEN": "sk-cp-chBYNqqOz4Mf6oWdB5myyC_SlkKuecP-rBSrEz_3HCslvk07FxlMB0zeq-WSF9A0LJORTBRwn5ZdOl_aBeM5Mczd9AdcQz-cJvPky30MVS4soqz5UXna4DM",
+        "ANTHROPIC_MODEL": "MiniMax-M2.5",
+        "ANTHROPIC_SMALL_FAST_MODEL": "MiniMax-M2.5",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "MiniMax-M2.5"
+    }
+}
