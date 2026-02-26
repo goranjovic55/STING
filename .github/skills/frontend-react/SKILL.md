@@ -21,7 +21,7 @@ description: Load when editing .tsx, .jsx files or working in components/, pages
 | Hooks | Stale closures | Add all deps to useEffect dependency array |
 | State | Settings lost on refresh | Use localStorage for persistent settings |
 | Zustand | Memory leaks | Clean up selectors/subscriptions |
-| Auth | Wrong storage key | Use `localStorage.getItem('nop-auth')` not `'token'` |
+| Auth | Wrong storage key | Use project-specific localStorage key (check auth service) |
 | Async | State stale in callback | Capture with `{ ...localState }` BEFORE async calls |
 | ConfigPanel | Save lost | Call `saveCurrentWorkflow()` after `updateNode()` |
 

@@ -111,4 +111,4 @@ class ItemService:
 | Run tests | `cd backend && pytest -v` |
 | Create migration | `cd backend && alembic revision --autogenerate -m "msg"` |
 | Apply migrations | `cd backend && alembic upgrade head` |
-| Enter container | `docker exec -it nop-backend bash` |
+| Enter container | `docker exec -it <backend-container> bash  # Example: nop-backend, sting-api` |

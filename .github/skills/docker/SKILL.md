@@ -57,7 +57,7 @@ docker compose up -d
 
 # Pattern 5: Debug container
 docker compose logs -f backend --tail 100
-docker exec -it nop-backend bash
+docker exec -it <container-name> bash  # Example: nop-backend, sting-processor
 ```
 
 ## Environment Detection
@@ -76,7 +76,7 @@ docker exec -it nop-backend bash
 | Start dev | `docker compose -f docker/docker-compose.dev.yml up -d` |
 | Rebuild service | `docker compose up -d --build backend` |
 | View logs | `docker compose logs -f backend` |
-| Enter container | `docker exec -it nop-backend bash` |
+| Enter container | `docker exec -it <container-name> bash  # Example: nop-backend, sting-processor` |
 | Stop all | `docker compose down` |
 | Full reset | `docker compose down && docker compose up -d --build` |
 | Check status | `docker compose ps` |

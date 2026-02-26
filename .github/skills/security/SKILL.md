@@ -28,7 +28,7 @@ description: Load when reviewing security vulnerabilities, injection risks, auth
 | A09 Logging Failures | Security events logged | Log auth, access, errors |
 | A10 SSRF | URL validation | Whitelist allowed domains |
 
-## Common Vulnerabilities (NOP-specific)
+## Common Vulnerabilities (Project Examples)
 
 | Location | Risk | Mitigation |
 |----------|------|------------|
@@ -104,4 +104,4 @@ def safe_path(base_dir: str, user_path: str) -> Path:
 ## References
 - [OWASP Top 10](https://owasp.org/Top10/)
 - [OWASP Cheat Sheets](https://cheatsheetseries.owasp.org/)
-- NOP: `backend/app/core/security.py`
+- Example (NOP): `backend/app/core/security.py`
