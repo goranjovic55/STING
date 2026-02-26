@@ -1,0 +1,15 @@
+{
+    "log_source": "local",
+    "local_log_path": "/var/log/cowrie/cowrie.json",
+    "mode": "batch",
+    "batch_size": 1000,
+    "db_path": "/root/honeypot-intel/data/honeypot.db",
+    "archive_dir": "/root/honeypot-intel/archive",
+    "log_path": "/root/honeypot-intel/logs/pipeline.log",
+    "immediate_severities": ["CRITICAL", "HIGH"],
+    "digest_severities": ["MEDIUM", "LOW"],
+    "store_events": true,
+    "store_alerts": true,
+    "send_immediate_alerts": false,
+    "send_digests": false
+}
