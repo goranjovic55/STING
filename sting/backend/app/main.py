@@ -4,8 +4,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from contextlib import asynccontextmanager
 import json
+import asyncio
 from datetime import datetime, timedelta
-from typing import Dict, Set
+from typing import Dict, Set, Optional
 import uuid
 
 from app.core.config import settings
@@ -13,6 +14,10 @@ from app.core.db import engine, Base
 
 # Import API routers
 from app.api.v1 import events, sessions, canary, samples, lab, export
+
+# SSH Proxy state
+_ssh_proxy_task: Optional[asyncio.Task] = None
+_ssh_proxy_running = False
 
 # WebSocket connection manager
 class ConnectionManager:
@@ -114,6 +119,50 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         return payload.get("sub")
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+
+# Proxy control endpoints
+from app.proxy.ssh_proxy import start_ssh_proxy
+
+@app.post("/api/v1/proxy/ssh/start")
+async def start_ssh():
+    """Start the SSH proxy server"""
+    global _ssh_proxy_task, _ssh_proxy_running
+    if _ssh_proxy_running:
+        return {"status": "already_running", "message": "SSH proxy already running"}
+
+    try:
+        _ssh_proxy_task = asyncio.create_task(start_ssh_proxy("0.0.0.0", 2222))
+        _ssh_proxy_running = True
+        return {"status": "started", "message": "SSH proxy started on port 2222"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start SSH proxy: {str(e)}")
+
+
+@app.post("/api/v1/proxy/ssh/stop")
+async def stop_ssh():
+    """Stop the SSH proxy server"""
+    global _ssh_proxy_task, _ssh_proxy_running
+    if not _ssh_proxy_running:
+        return {"status": "not_running", "message": "SSH proxy not running"}
+
+    if _ssh_proxy_task:
+        _ssh_proxy_task.cancel()
+        try:
+            await _ssh_proxy_task
+        except asyncio.CancelledError:
+            pass
+    _ssh_proxy_running = False
+    return {"status": "stopped", "message": "SSH proxy stopped"}
+
+
+@app.get("/api/v1/proxy/status")
+async def get_proxy_status():
+    """Get proxy status"""
+    return {
+        "ssh": {"running": _ssh_proxy_running, "port": 2222}
+    }
+
 
 # Export manager for use in other modules
 __all__ = ["app", "manager"]

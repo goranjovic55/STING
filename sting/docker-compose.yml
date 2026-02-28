@@ -2,9 +2,12 @@ version: '3.8'
 
 services:
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     ports:
       - 8700:8700
+      - 2222:2222
     environment:
       - DATABASE_URL=postgresql+asyncpg://sting:sting@postgres:5432/sting
       - REDIS_URL=redis://redis:6379
@@ -15,7 +18,9 @@ services:
       - ./backend:/app
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
     ports:
       - 8701:8701
     depends_on:
