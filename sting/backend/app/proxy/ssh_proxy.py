@@ -1,10 +1,11 @@
 # SSH Proxy - asyncssh-based transparent proxy
 import asyncio
 import asyncssh
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import uuid
 from datetime import datetime
 import sys
+import os
 
 from ..verdict.engine import get_engine
 from ..verdict.session_layer import get_session, create_session
@@ -36,17 +37,39 @@ VIRTUAL_FS: Dict[str, Dict[str, Any]] = {
         "content": "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAffake...\n-----END RSA PRIVATE KEY-----\n",
         "restricted": True
     },
+    "/home/sting/.ssh/authorized_keys": {
+        "type": "file",
+        "content": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ...\n",
+        "restricted": True
+    },
     "/var/log/messages": {
         "type": "file",
         "content": "Feb 28 12:00:00 server1 sshd[1234]: Accepted password\n" * 10
+    },
+    "/var/log/secure": {
+        "type": "file",
+        "content": "Feb 28 10:00:00 server1 sshd[1000]: Accepted publickey for root\n" * 5
     },
     "/etc/hostname": {
         "type": "file",
         "content": "victim-server\n"
     },
+    "/etc/ssh/sshd_config": {
+        "type": "file",
+        "content": "Port 22\nPermitRootLogin yes\nPubkeyAuthentication yes\nPasswordAuthentication yes\n"
+    },
+    "/etc/ssh/ssh_host_rsa_key": {
+        "type": "file",
+        "content": "-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----\n",
+        "restricted": True
+    },
     "/proc/cpuinfo": {
         "type": "file",
-        "content": "processor\t: 0\nvendor_id\t: GenuineIntel\n"
+        "content": "processor\t: 0\nvendor_id\t: GenuineIntel\ncpu family\t: 6\nmodel\t\t: 85\nmodel name\t: Intel(R) Xeon(R) CPU @ 2.20GHz\n"
+    },
+    "/proc/meminfo": {
+        "type": "file",
+        "content": "MemTotal:        2048000 kB\nMemFree:          500000 kB\nMemAvailable:    1500000 kB\n"
     },
     "/bin/ls": {
         "type": "file",
@@ -57,6 +80,29 @@ VIRTUAL_FS: Dict[str, Dict[str, Any]] = {
         "type": "file",
         "executable": True,
         "content": "#!/bin/bash\ncat \"$@\"\n"
+    },
+    "/bin/bash": {
+        "type": "file",
+        "executable": True,
+        "content": "#!/bin/bash\n"
+    },
+    "/etc/profile": {
+        "type": "file",
+        "content": "PATH=/usr/local/sbin:/usr/sbin:/sbin:$PATH\nexport PATH\n"
+    },
+    "/root/.bashrc": {
+        "type": "file",
+        "content": "alias ll='ls -la'\nexport PS1='\\u@\\h:\\w\\$ '\n"
+    },
+    "/root/.gitconfig": {
+        "type": "file",
+        "content": "[user]\n\temail = admin@victim.local\n\tname = root\n",
+        "restricted": True
+    },
+    "/home/sting/.bash_history": {
+        "type": "file",
+        "content": "ls -la\ncat /etc/passwd\ncd /root\n",
+        "restricted": True
     },
 }
 
@@ -392,9 +438,126 @@ async def start_ssh_proxy(host: str = "0.0.0.0", port: int = 2222):
         server_keys=[key_path],
         process_factory=StingSession,
         allow_pty=True,
+        sftp_factory=StingSFTPServer,
     )
 
     print(f"[STING] SSH proxy listening on {host}:{port}")
+
+
+class StingSFTPServer(asyncssh.SFTPServer):
+    """SFTP server for virtual filesystem"""
+
+    def __init__(self, channel: asyncssh.SSHChannel):
+        super().__init__(channel)
+        self.session_id = channel.get_connection().session_id
+        self.engine = get_engine()
+
+    def read(self, path: str, offset: int, size: int) -> bytes:
+        """Read file from virtual FS"""
+        session = get_session(self.session_id)
+        if session:
+            session.read(path)
+
+        # Check for canary access
+        for canary in ["/etc/shadow", "/root/secrets", ".ssh/id_rsa"]:
+            if canary in path:
+                if session:
+                    session.add_capture(path)
+                self.engine.score_event(self.session_id, "CANARY_HIT")
+                raise asyncssh.SFTPError(asyncssh.SFTP_PERMISSION_DENIED, "Permission denied")
+
+        if path in VIRTUAL_FS:
+            content = VIRTUAL_FS[path].get("content", b"")
+            if isinstance(content, str):
+                content = content.encode()
+            return content[offset:offset + size]
+
+        # Directory listing
+        if path == "/" or path == "/home" or path == "/home/sting":
+            return b"."
+
+        raise asyncssh.SFTPError(asyncssh.SFTP_NO_SUCH_FILE, "No such file")
+
+    def write(self, path: str, offset: int, data: bytes) -> None:
+        """Log write operations"""
+        session = get_session(self.session_id)
+        if session:
+            session.write(path, data.decode("utf-8", errors="ignore"), "sftp_write")
+        self.engine.score_event(self.session_id, "FILE_WRITE")
+
+    def listdir(self, path: str) -> List[asyncssh.SFTPName]:
+        """List directory contents"""
+        session = get_session(self.session_id)
+        if session:
+            session.read(path)
+
+        # Root directory
+        if path == "/":
+            return [
+                asyncssh.SFTPName("bin", asyncssh.SFTPFileAttributes(type=2)),
+                asyncssh.SFTPName("etc", asyncssh.SFTPFileAttributes(type=2)),
+                asyncssh.SFTPName("home", asyncssh.SFTPFileAttributes(type=2)),
+                asyncssh.SFTPName("var", asyncssh.SFTPFileAttributes(type=2)),
+                asyncssh.SFTPName("root", asyncssh.SFTPFileAttributes(type=2)),
+                asyncssh.SFTPName("tmp", asyncssh.SFTPFileAttributes(type=2)),
+                asyncssh.SFTPName("usr", asyncssh.SFTPFileAttributes(type=2)),
+                asyncssh.SFTPName("proc", asyncssh.SFTPFileAttributes(type=2)),
+            ]
+
+        # /home directory
+        if path == "/home":
+            return [
+                asyncssh.SFTPName("sting", asyncssh.SFTPFileAttributes(type=2)),
+            ]
+
+        # /home/sting
+        if path == "/home/sting":
+            return [
+                asyncssh.SFTPName(".bashrc", asyncssh.SFTPFileAttributes(type=1, size=100)),
+                asyncssh.SFTPName(".ssh", asyncssh.SFTPFileAttributes(type=2)),
+            ]
+
+        # /home/sting/.ssh
+        if path == "/home/sting/.ssh":
+            return [
+                asyncssh.SFTPName("authorized_keys", asyncssh.SFTPFileAttributes(type=1, size=50)),
+            ]
+
+        raise asyncssh.SFTPError(asyncssh.SFTP_NO_SUCH_FILE, "No such directory")
+
+    def mkdir(self, path: str) -> None:
+        """Log directory creation"""
+        session = get_session(self.session_id)
+        if session:
+            session.write(path, "", "mkdir")
+        self.engine.score_event(self.session_id, "FILE_WRITE")
+
+    def rmdir(self, path: str) -> None:
+        """Log directory removal"""
+        self.engine.score_event(self.session_id, "FILE_DELETE")
+
+    def remove(self, path: str) -> None:
+        """Log file removal"""
+        self.engine.score_event(self.session_id, "FILE_DELETE")
+
+    def rename(self, old_path: str, new_path: str) -> None:
+        """Log file rename"""
+        session = get_session(self.session_id)
+        if session:
+            session.write(new_path, f"rename from {old_path}", "rename")
+
+
+# Add key-based authentication support
+class StingSSHServerWithKeys(StingSSHServer):
+    """Extended SSH server with key-based auth"""
+
+    def public_key_auth_supported(self) -> bool:
+        return True
+
+    def validate_public_key(self, username: str, key: asyncssh.SSHPublicKey) -> bool:
+        """Validate public key - accept all for honeypot"""
+        print(f"[STING] Public key auth: user={username} key_type={key.get_name()}")
+        return True  # Accept all for deception
 
 
 if __name__ == "__main__":
