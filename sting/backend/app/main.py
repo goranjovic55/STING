@@ -10,7 +10,8 @@ from typing import Dict, Set, Optional
 import uuid
 
 from app.core.config import settings
-from app.core.db import engine, Base
+from app.core.db import engine
+from app.models.session import Base
 
 # Import API routers
 from app.api.v1 import events, sessions, canary, samples, lab, export
