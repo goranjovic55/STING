@@ -542,3 +542,165 @@ Pass: STING catches, captures, streams live, maps to MITRE, generates YARA.
 ---
 
 **Awaiting green light.**
+
+---
+
+## 13. UNIVERSAL SESSION LAYER
+
+Every connection — regardless of protocol — gets a **session layer**: an isolated write buffer that intercepts all mutations to the real service. The real service never sees attacker writes until operator explicitly commits.
+
+```
+UNIVERSAL MODEL:
+
+Real Service (untouched)
+        ↑
+        │ only on COMMIT
+        │
+  SESSION LAYER (per connection)
+  ┌─────────────────────────────────────┐
+  │ session_id: abc123                  │
+  │ ip: 45.63.x.x  score: 87           │
+  │                                     │
+  │ All writes buffered here            │
+  │ Reads: session layer first,         │
+  │        fall through to real service │
+  │ Attacker sees: success always       │
+  └─────────────────────────────────────┘
+        │
+   Operator decision:
+   [NUKE]   → drop layer, zero trace
+   [COMMIT] → merge to real service
+   [LAB]    → ship layer to lab, wipe proxy side
+              attacker stays connected (silent transfer)
+              OR connection dropped (operator choice)
+```
+
+### Per-Protocol Implementation
+
+| Service | "Write" | Session Layer | Revert |
+|---------|---------|--------------|--------|
+| SSH | file write | in-memory FS dict / tmpfs | del dict |
+| FTP | file upload | ring buffer (last 10MB) + metadata | delete buffer |
+| HTTP | POST/PUT body | request log | discard |
+| PostgreSQL | INSERT/UPDATE/DELETE | SAVEPOINT per session | ROLLBACK TO SAVEPOINT |
+| MySQL | same | same | same |
+| SMTP | email send | queued, undelivered | dequeue |
+| Redis | SET/HSET/etc | command log | replay DEL |
+| Generic TCP | stream data | ring buffer | drop buffer |
+
+### DB Isolation — Savepoint Model
+
+```sql
+-- Session connects
+BEGIN;
+SAVEPOINT sting_abc123;
+
+-- Attacker runs:
+INSERT INTO users VALUES ('backdoor', 'admin');
+-- Attacker sees: "1 row inserted" (real, inside savepoint)
+
+-- Operator: NUKE
+ROLLBACK TO SAVEPOINT sting_abc123;
+-- DB: as if it never happened
+
+-- Operator: COMMIT
+RELEASE SAVEPOINT sting_abc123; COMMIT;
+-- DB: now real
+```
+
+**DDL edge case:** `CREATE TABLE` / `DROP TABLE` can't always roll back cleanly inside savepoints. Solution: hostile sessions routed to an isolated DB schema (`sting_session_abc123`). NUKE = `DROP SCHEMA sting_session_abc123 CASCADE`.
+
+### LAB Transfer — Pre-seeded Context
+
+When operator chooses LAB, the victim container is pre-seeded with the attacker's full session state:
+
+```
+Lab victim container receives:
+  writes/          ← everything attacker wrote
+  reads/           ← canary hits, accessed paths  
+  captures/        ← downloaded binaries
+  manifest.json    ← IP, timing, commands, score
+
+Result: lab runs the malware in the exact environment
+        the attacker set up — full attack chain visible,
+        not just isolated binary
+```
+
+---
+
+## 14. SESSION RESOURCE ENVELOPES
+
+Every hostile session gets a fixed resource budget. Proxy enforces hard limits — resource exhaustion attacks (50GB FTP upload, 10M DB inserts) are neutralized automatically.
+
+### Per-Session Budget
+
+```
+SESSION ENVELOPE (defaults, operator-configurable):
+
+  disk_mb:       50     # total writes to session layer
+  memory_mb:     10     # in-memory FS cap
+  max_files:     100    # file count cap
+  max_db_rows:   10000  # savepoint row cap
+  max_duration:  1800s  # 30min hard TTL
+  
+ON ANY BREACH:
+  action:        auto_nuke   (or: alert_only | throttle)
+  score_spike:   +40         (hitting limits = hostile signal)
+  notify:        true
+```
+
+### Score-Based Resource Tiers
+
+Higher hostility = tighter resource box:
+
+| Score | Tier | Disk | TTL |
+|-------|------|------|-----|
+| 80–100 | High hostile | 10MB | 5min |
+| 50–79 | Medium | 25MB | 15min |
+| 20–49 | Pending | 50MB | 30min |
+| 0–19 | Near-cleared | full | unlimited |
+
+### FTP / Large Upload — Ring Buffer
+
+Never buffer entire file. Rolling capture window:
+
+```
+Attacker uploads 50GB:
+
+Ring buffer (last 10MB always kept):
+[chunk_n-100]...[chunk_n-1][chunk_n]
+                                  ↑ newest
+
+Older chunks → streamed to LAB immediately if capture active
+             → metadata only retained (offset, sha256)
+
+Attacker sees: transfer progress + fake success
+Real service:  never receives anything
+```
+
+Rationale: malware payloads fit in the first 10MB. 50GB uploads are noise or DoS attempts — ring buffer captures the payload, discards the padding.
+
+### Concurrent Session Cap
+
+```
+MAX_HOSTILE_SESSIONS = 50  (configurable)
+
+If cap reached:
+  new connection → fast honeypot mode
+                   fake-accept → log IP → auto-nuke after 30s
+                   no resource allocation
+```
+
+### Session TTL — The Backstop
+
+Every hostile session auto-nukes at TTL regardless of activity:
+
+```
+T+0:    Session created, envelope allocated
+T+TTL:  AUTO-NUKE
+        Attacker sees: connection timeout (normal)
+        Operator gets: summary notification + full diff
+```
+
+Worst-case storage = MAX_HOSTILE_SESSIONS × max_disk_mb × concurrency window. Fully predictable and bounded.
+
