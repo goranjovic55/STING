@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { format } from 'date-fns'
-import { Search, Filter, AlertTriangle, Clock, CheckCircle, Trash2, Eye } from 'lucide-react'
+import { Search, Filter, CheckCircle, Trash2, Eye } from 'lucide-react'
 
 interface Session {
   id: string

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { format } from 'date-fns'
-import { Upload, Search, Play, Pause, Trash2, FileBinary, AlertTriangle } from 'lucide-react'
+import { Upload, Search, Play, Pause, Trash2, FileCode } from 'lucide-react'
 
 interface Sample {
   id: string
@@ -135,7 +135,7 @@ export default function Samples() {
                 <tr key={sample.id} className="border-b border-sting-border hover:bg-sting-border/30">
                   <td className="p-4">
                     <div className="flex items-center gap-2">
-                      <FileBinary className="w-4 h-4 text-cyan-400" />
+                      <FileCode className="w-4 h-4 text-cyan-400" />
                       <span className="font-medium text-sm">{sample.filename}</span>
                     </div>
                   </td>

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { format } from 'date-fns'
-import { Play, Square, Terminal, Network, FileCode, Cpu, AlertCircle, CheckCircle, Clock } from 'lucide-react'
+import { Square, Terminal, Network, FileCode, Cpu, AlertCircle, CheckCircle, Clock } from 'lucide-react'
 
 interface LabJob {
   id: string
@@ -39,19 +39,6 @@ export default function Lab() {
       console.error('Failed to fetch jobs:', e)
     } finally {
       setLoading(false)
-    }
-  }
-
-  const launchJob = async (sessionId: string) => {
-    try {
-      await fetch('/api/v1/lab/detonate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId }),
-      })
-      fetchJobs()
-    } catch (e) {
-      console.error('Failed to launch job:', e)
     }
   }
 
