@@ -704,3 +704,247 @@ T+TTL:  AUTO-NUKE
 
 Worst-case storage = MAX_HOSTILE_SESSIONS × max_disk_mb × concurrency window. Fully predictable and bounded.
 
+
+---
+
+## 13. UNIVERSAL SESSION LAYER
+
+Every connection — regardless of protocol — gets a **session layer**: an isolated write buffer. Real service never touched until operator COMMIT.
+
+```
+SESSION LAYER MODEL:
+
+Real Service (untouched)
+        ↑
+        │ only on COMMIT
+  ──────┘
+  SESSION LAYER (per connection, in-memory)
+  ┌─────────────────────────────────────┐
+  │ id: abc123  ip: 45.63.x.x          │
+  │ score: 87 (hostile)                 │
+  │ writes: {'/tmp/x': b'...', ...}     │
+  │ reads: ['/root/secrets.txt', ...]   │
+  │ captures: ['miner.sh (sha256)']     │
+  │ resource: 12MB / 50MB  3min / 30min │
+  └─────────────────────────────────────┘
+```
+
+### Operator Decision Tree
+
+```
+Session active — operator sees live diff
+      │
+      ├─ [NUKE]    Drop layer. Zero trace. Real FS untouched.
+      │            Attacker sees: connection reset or timeout.
+      │
+      ├─ [COMMIT]  Merge writes to real service.
+      │            Legit user confirmed.
+      │
+      └─ [LAB]     Package session layer → ship to detonation lab.
+                   Wipe proxy session layer.
+                   Attacker options:
+                     SILENT: stays connected, fresh clean state
+                             (attacker may re-drop tools = second capture)
+                     DROP:   connection terminated
+                   Lab victim container pre-seeded with attacker's
+                   full environment (files written, dirs created, etc.)
+```
+
+### Per-Protocol Implementation
+
+| Service | Write interception | Session layer | Revert |
+|---------|-------------------|---------------|--------|
+| SSH | asyncssh virtual FS | memory dict {path: content} | del dict |
+| FTP | proxy intercept | ring buffer (last 10MB) + metadata | delete buffer |
+| HTTP | middleware intercept | request log | discard |
+| PostgreSQL | SQL proxy | SAVEPOINT sting_{id} | ROLLBACK TO SAVEPOINT |
+| MySQL | same | same | same |
+| SMTP | queue intercept | undelivered queue | dequeue |
+| Redis | command intercept | command replay log | replay DEL |
+| Generic TCP | stream buffer | ring buffer | drop buffer |
+
+### DB Isolation (Savepoint Model)
+
+```sql
+BEGIN;
+SAVEPOINT sting_abc123;
+-- All attacker writes inside savepoint
+-- Attacker sees: success (rows affected)
+-- NUKE:   ROLLBACK TO SAVEPOINT sting_abc123
+-- COMMIT: RELEASE SAVEPOINT sting_abc123; COMMIT
+```
+DDL edge case: hostile sessions routed to isolated schema `sting_{session_id}`. NUKE = `DROP SCHEMA CASCADE`.
+
+---
+
+## 14. SESSION RESOURCE ENVELOPES
+
+Every hostile session has a fixed resource budget. Exhaustion = auto-nuke + score spike.
+
+### Score-Based Tiers
+
+| Score | Tier | Disk | TTL |
+|-------|------|------|-----|
+| 80–100 | High hostile | 10MB | 5min |
+| 50–79 | Medium | 25MB | 15min |
+| 20–49 | Pending | 50MB | 30min |
+| 0–19 | Near-cleared | unlimited | unlimited |
+
+### Defaults (configurable)
+
+```yaml
+session_limits:
+  disk_mb: 50
+  memory_mb: 10
+  max_files: 100
+  max_db_rows: 10000
+  max_duration: 1800
+on_breach:
+  action: auto_nuke       # auto_nuke | alert_only | throttle
+  score_spike: 40
+  notify: true
+```
+
+### FTP / Large Upload — Ring Buffer
+
+Never buffer entire file. Rolling 10MB window:
+- Older chunks → streamed to LAB capture + metadata only retained
+- Attacker sees: progress + fake success
+- Real service: receives nothing
+
+### Concurrent Session Cap
+
+```
+MAX_HOSTILE_SESSIONS = 50
+If cap reached → new connection = fast honeypot mode
+  (fake-accept → log IP → auto-nuke after 30s, zero resource allocation)
+```
+
+---
+
+## 15. DETAILED IMPLEMENTATION ROADMAP
+
+### Phase 1 — Foundation (Week 1)
+
+| Task | Details | Deliverable |
+|------|---------|-------------|
+| P1-01 | Project scaffold: dirs, requirements.txt, docker-compose.yml | Repo structure |
+| P1-02 | PostgreSQL schema: sessions, events, canaries, samples, lab_jobs tables | DB migrations |
+| P1-03 | FastAPI app skeleton: main.py, health endpoint, CORS, middleware | GET /health → 200 |
+| P1-04 | JWT auth: single-user, token endpoint, auth dependency | POST /auth/token |
+| P1-05 | Session model: session_layer.py — write/read/nuke/commit/diff | Unit tests pass |
+| P1-06 | Verdict engine: score state machine, event handlers, all score rules | Unit tests pass |
+| P1-07 | WebSocket event bus: channels, subscribe/publish, session routing | WS connects |
+| P1-08 | React scaffold: Vite + TS, router, sidebar, pages stub | npm run dev works |
+| P1-09 | Live feed component: WebSocket → event list, color-coded by type | Renders events |
+| P1-10 | Docker-compose: backend + frontend + postgres + redis | docker-compose up |
+
+### Phase 2 — SSH Proxy + Verdict (Week 2)
+
+| Task | Details | Deliverable |
+|------|---------|-------------|
+| P2-01 | asyncssh SSH proxy: binds :22, accepts connections, creates session layer | Accepts SSH |
+| P2-02 | Verdict engine wired to SSH proxy: score events on auth/commands | Score updates |
+| P2-03 | Virtual FS: canary files, fake /etc/shadow, realistic fake tree | cat /root/secrets.txt → canary |
+| P2-04 | Fake shell: basic commands (ls/cd/cat/pwd/id/whoami/uname) | Shell responds |
+| P2-05 | Passthrough: score < 30 → proxy to real sshd (:22022) | Transparent pass |
+| P2-06 | Session diff API: GET /api/v1/sessions/{id}/diff | Returns write diff |
+| P2-07 | Sessions UI page: active sessions, score, activity, diff view | Visible in UI |
+| P2-08 | Operator actions: POST /api/v1/sessions/{id}/nuke|commit|lab | NUKE drops layer |
+
+### Phase 3 — Canary System (Week 3)
+
+| Task | Details | Deliverable |
+|------|---------|-------------|
+| P3-01 | Canary management API: CRUD /api/v1/canary | Create/list/delete canaries |
+| P3-02 | File canary hit detection: access to canary path → event + score spike | Hit logged |
+| P3-03 | Credential canary: fake creds in virtual /etc/shadow → login triggers alert | Cred canary fires |
+| P3-04 | URL canary beacon server: GET /beacon/{id} → logs external attacker | Beacon hits |
+| P3-05 | DNS canary: unique subdomain → STING DNS sink logs query | DNS hit logged |
+| P3-06 | Token canary: fake AWS/API keys → external beacon on use | Token canary |
+| P3-07 | Canary dashboard UI: list all canaries, hit count, timeline | Canary page live |
+
+### Phase 4a — Lab Foundation (Week 4)
+
+| Task | Details | Deliverable |
+|------|---------|-------------|
+| P4-01 | Isolated Docker network: 172.31.0.0/24, no external routing | Network created |
+| P4-02 | Victim container base image: Dockerfile.victim (minimal Debian) | Image builds |
+| P4-03 | Monitoring sidecar: strace + tshark + inotifywait + pspy + ss poll | Sidecar captures |
+| P4-04 | Fake DNS sink: logs all queries, returns NXDOMAIN or fake IPs | DNS logged |
+| P4-05 | Fake HTTP sink: logs all requests, returns 200 OK | HTTP logged |
+| P4-06 | Detonation API: POST /api/v1/lab/detonate/{hash} → spawn containers | Job created |
+| P4-07 | Lab job status: GET /api/v1/lab/jobs, GET /api/v1/lab/jobs/{id} | Status returns |
+| P4-08 | Session→Lab transfer: LAB action packages session layer → pre-seeds victim | Pre-seed works |
+
+### Phase 4b — Real-Time Lab UI (Week 5)
+
+| Task | Details | Deliverable |
+|------|---------|-------------|
+| P4b-01 | 4-channel WebSocket: syscalls / network / filesystem / processes | 4 streams live |
+| P4b-02 | Syscall stream parser: strace output → structured JSON events | Parsed syscalls |
+| P4b-03 | Network stream parser: tshark output → structured JSON events | Parsed network |
+| P4b-04 | Filesystem stream: inotifywait → structured JSON events | FS diffs live |
+| P4b-05 | Process stream: pspy + ss → process spawn/kill events | Proc tree live |
+| P4b-06 | Lab viewer UI: 4-panel live view (syscalls/net/fs/proc) | Live panels |
+| P4b-07 | Process tree component: parent/child relationships, colored by risk | Tree renders |
+| P4b-08 | Timeline component: horizontal timeline, phase markers | Timeline live |
+| P4b-09 | Pause/freeze: SIGSTOP via API, UI pause button | Freeze works |
+| P4b-10 | Memory inspect: GET /proc/{pid}/mem → strings + entropy in UI | Mem inspect |
+
+### Phase 5 — Intelligence Layer (Week 6)
+
+| Task | Details | Deliverable |
+|------|---------|-------------|
+| P5-01 | YARA rule generator: extract strings + patterns → yara-python rule | YARA generated |
+| P5-02 | MITRE ATT&CK mapper: syscall patterns → technique IDs | ATT&CK tags |
+| P5-03 | IOC extractor: IPs/domains/hashes/paths from all streams | IOC list |
+| P5-04 | Pattern clustering: group similar behaviors across samples | Cluster view |
+| P5-05 | IOC feed export: GET /api/v1/export/ioc → JSON / STIX | Export works |
+| P5-06 | PDF report: full analysis → generate PDF with all findings | PDF downloads |
+| P5-07 | Sample vault UI: browse samples, filter by type/date/score | Vault page |
+| P5-08 | Lab results UI: YARA + MITRE + IOC + timeline in one view | Results page |
+
+### Phase 6 — HTTP Proxy + Additional Protocols (Week 6-7)
+
+| Task | Details | Deliverable |
+|------|---------|-------------|
+| P6-01 | nginx + lua verdict middleware: calls STING verdict API per request | HTTP proxied |
+| P6-02 | HTTP session layer: intercept POST/PUT, fake 200, log body | HTTP writes buffered |
+| P6-03 | FTP proxy: intercept uploads, ring buffer, fake success | FTP buffered |
+| P6-04 | Resource envelope enforcement: disk/memory/TTL per session | Limits enforced |
+| P6-05 | Auto-nuke on breach: TTL expiry + limit hit → automatic NUKE | Auto-nuke fires |
+| P6-06 | Concurrent session cap: MAX=50, fast mode beyond cap | Cap enforced |
+
+### Phase 7 — Production Test (Week 7)
+
+| Task | Details | Deliverable |
+|------|---------|-------------|
+| P7-01 | Deploy on CT102 (dev mode, all services) | Live on CT102 |
+| P7-02 | Generate 8 test malware samples via Venice | Samples ready |
+| P7-03 | Full pipeline test: trap → capture → lab → stream → intelligence | End-to-end pass |
+| P7-04 | Load test: 50 concurrent hostile sessions | No OOM, no crash |
+| P7-05 | Detection test: all 8 samples detected + MITRE mapped | 8/8 pass |
+| P7-06 | YARA test: generated rules catch samples on rescan | Rules valid |
+| P7-07 | Production harden: rate limiting, input validation, auth | Hardened |
+| P7-08 | CT100 integration: wire to live Cowrie feed + SSH port 22 | Prod live |
+
+---
+
+## 16. VENICE TEST MALWARE PLAN
+
+8 samples generated via Venice API, tested against full STING pipeline:
+
+| # | Sample | Behavior | Test Objective |
+|---|--------|----------|---------------|
+| 1 | dropper.sh | wget + chmod + exec | Capture + detonation chain |
+| 2 | ssh_persist.sh | inject /root/.ssh/authorized_keys | Persistence detection (T1098) |
+| 3 | miner.sh | XMRig-style, pool connect | Network stream + T1496 |
+| 4 | scanner.sh | internal network sweep | Network pattern + T1046 |
+| 5 | exfil.sh | curl POST to fake C2 | Network IOC extraction |
+| 6 | rootkit_lite.sh | /proc name manipulation | Syscall detection T1014 |
+| 7 | reverse_shell.sh | bash TCP reverse shell | Network + process T1059 |
+| 8 | polymorphic.sh | base64 decode + exec | Entropy detection |
+
+Pass criteria: STING catches → captures → streams live → MITRE maps → YARA generates.
+
