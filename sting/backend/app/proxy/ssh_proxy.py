@@ -1,10 +1,6 @@
 # SSH Proxy - asyncssh-based transparent proxy
 import asyncio
-from asyncssh import (
-    SSHServer, SSHServerSession, SSHChannel, SSHPublicKey,
-    SFTPServer, SFTPError, SFTP_PERMISSION_DENIED, SFTP_NO_SUCH_FILE,
-    SFTPName, SFTPFileAttributes, generate_private_key, create_server
-)
+import asyncssh
 from typing import Optional, Dict, Any, List
 import uuid
 from datetime import datetime
@@ -117,12 +113,12 @@ FAKE_PROMPTS = [
 ]
 
 
-class StingSSHServer(SSHServer):
+class StingSSHServer(asyncssh.SSHServer):
     """SSH server that intercepts sessions for analysis"""
 
     def __init__(self):
         self.engine = get_engine()
-        self.sessions: Dict[str, SSHServerSession] = {}
+        self.sessions: Dict[str, asyncssh.SSHServerSession] = {}
 
     def connection_made(self, conn):
         ip = conn.get_extra_info('peername')[0]
@@ -156,7 +152,7 @@ class StingSSHServer(SSHServer):
         return True  # Accept all for deception
 
 
-class StingSession(SSHServerSession):
+class StingSession(asyncssh.SSHServerSession):
     """Custom session that intercepts commands"""
 
     def __init__(self):
@@ -427,7 +423,7 @@ async def start_ssh_proxy(host: str = "0.0.0.0", port: int = 2222):
     import os
     key_path = "/tmp/sting_host_key"
     if not os.path.exists(key_path):
-        key = generate_private_key("ssh-rsa")
+        key = asyncssh.generate_private_key("ssh-rsa")
         with open(key_path, "wb") as f:
             f.write(key.export_private_key())
 
@@ -435,7 +431,7 @@ async def start_ssh_proxy(host: str = "0.0.0.0", port: int = 2222):
 
     print(f"[STING] Starting SSH proxy on {host}:{port}")
 
-    await create_server(
+    await asyncssh.create_server(
         lambda: StingSSHServer(),
         host,
         port,
@@ -448,7 +444,7 @@ async def start_ssh_proxy(host: str = "0.0.0.0", port: int = 2222):
     print(f"[STING] SSH proxy listening on {host}:{port}")
 
 
-class StingSFTPServer(SFTPServer):
+class StingSFTPServer(asyncssh.SFTPServer):
     """SFTP server for virtual filesystem"""
 
     def __init__(self, channel):
@@ -468,7 +464,7 @@ class StingSFTPServer(SFTPServer):
                 if session:
                     session.add_capture(path)
                 self.engine.score_event(self.session_id, "CANARY_HIT")
-                raise SFTPError(SFTP_PERMISSION_DENIED, "Permission denied")
+                raise asyncssh.SFTPError(asyncssh.SFTP_PERMISSION_DENIED, "Permission denied")
 
         if path in VIRTUAL_FS:
             content = VIRTUAL_FS[path].get("content", b"")
@@ -480,7 +476,7 @@ class StingSFTPServer(SFTPServer):
         if path == "/" or path == "/home" or path == "/home/sting":
             return b"."
 
-        raise SFTPError(SFTP_NO_SUCH_FILE, "No such file")
+        raise asyncssh.SFTPError(asyncssh.SFTP_NO_SUCH_FILE, "No such file")
 
     def write(self, path: str, offset: int, data: bytes) -> None:
         """Log write operations"""
@@ -489,7 +485,7 @@ class StingSFTPServer(SFTPServer):
             session.write(path, data.decode("utf-8", errors="ignore"), "sftp_write")
         self.engine.score_event(self.session_id, "FILE_WRITE")
 
-    def listdir(self, path: str) -> List[SFTPName]:
+    def listdir(self, path: str):
         """List directory contents"""
         session = get_session(self.session_id)
         if session:
@@ -498,36 +494,36 @@ class StingSFTPServer(SFTPServer):
         # Root directory
         if path == "/":
             return [
-                SFTPName("bin", SFTPFileAttributes(type=2)),
-                SFTPName("etc", SFTPFileAttributes(type=2)),
-                SFTPName("home", SFTPFileAttributes(type=2)),
-                SFTPName("var", SFTPFileAttributes(type=2)),
-                SFTPName("root", SFTPFileAttributes(type=2)),
-                SFTPName("tmp", SFTPFileAttributes(type=2)),
-                SFTPName("usr", SFTPFileAttributes(type=2)),
-                SFTPName("proc", SFTPFileAttributes(type=2)),
+                asyncssh.SFTPName("bin", asyncssh.SFTPFileAttributes(type=2)),
+                asyncssh.SFTPName("etc", asyncssh.SFTPFileAttributes(type=2)),
+                asyncssh.SFTPName("home", asyncssh.SFTPFileAttributes(type=2)),
+                asyncssh.SFTPName("var", asyncssh.SFTPFileAttributes(type=2)),
+                asyncssh.SFTPName("root", asyncssh.SFTPFileAttributes(type=2)),
+                asyncssh.SFTPName("tmp", asyncssh.SFTPFileAttributes(type=2)),
+                asyncssh.SFTPName("usr", asyncssh.SFTPFileAttributes(type=2)),
+                asyncssh.SFTPName("proc", asyncssh.SFTPFileAttributes(type=2)),
             ]
 
         # /home directory
         if path == "/home":
             return [
-                SFTPName("sting", SFTPFileAttributes(type=2)),
+                asyncssh.SFTPName("sting", asyncssh.SFTPFileAttributes(type=2)),
             ]
 
         # /home/sting
         if path == "/home/sting":
             return [
-                SFTPName(".bashrc", SFTPFileAttributes(type=1, size=100)),
-                SFTPName(".ssh", SFTPFileAttributes(type=2)),
+                asyncssh.SFTPName(".bashrc", asyncssh.SFTPFileAttributes(type=1, size=100)),
+                asyncssh.SFTPName(".ssh", asyncssh.SFTPFileAttributes(type=2)),
             ]
 
         # /home/sting/.ssh
         if path == "/home/sting/.ssh":
             return [
-                SFTPName("authorized_keys", SFTPFileAttributes(type=1, size=50)),
+                asyncssh.SFTPName("authorized_keys", asyncssh.SFTPFileAttributes(type=1, size=50)),
             ]
 
-        raise SFTPError(SFTP_NO_SUCH_FILE, "No such directory")
+        raise asyncssh.SFTPError(asyncssh.SFTP_NO_SUCH_FILE, "No such directory")
 
     def mkdir(self, path: str) -> None:
         """Log directory creation"""
