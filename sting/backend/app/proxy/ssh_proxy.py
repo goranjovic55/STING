@@ -554,7 +554,7 @@ class StingSSHServerWithKeys(StingSSHServer):
     def public_key_auth_supported(self) -> bool:
         return True
 
-    def validate_public_key(self, username: str, key: SSHPublicKey) -> bool:
+    def validate_public_key(self, username: str, key) -> bool:
         """Validate public key - accept all for honeypot"""
         print(f"[STING] Public key auth: user={username} key_type={key.get_name()}")
         return True  # Accept all for deception
