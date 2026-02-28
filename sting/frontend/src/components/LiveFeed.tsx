@@ -13,7 +13,7 @@ interface Event {
 
 export default function LiveFeed() {
   const [events, setEvents] = useState<Event[]>([])
-  const [, setMinimized] = useState(false)
+  const [minimized] = useState(false)
   const [expanded, setExpanded] = useState(true)
   const wsRef = useRef<WebSocket | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
