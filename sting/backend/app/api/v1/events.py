@@ -8,7 +8,6 @@ from datetime import datetime
 
 from app.core.db import get_db
 from app.models.session import Event
-from app.main import manager
 
 router = APIRouter()
 
@@ -70,7 +69,8 @@ async def create_event(event: EventCreate, db: AsyncSession = Depends(get_db)):
     await db.commit()
     await db.refresh(db_event)
 
-    # Broadcast via WebSocket
+    # Broadcast via WebSocket (lazy import to avoid circular import)
+    from app.main import manager
     await manager.broadcast(
         "events",
         {
