@@ -6,10 +6,22 @@ import uuid
 from datetime import datetime
 import sys
 import os
+# Ensure /app is in path for executor threads
+if "/app" not in sys.path:
+    sys.path.insert(0, "/app")
 
-from ..verdict.engine import get_engine
-from ..verdict.session_layer import get_session, create_session
-from ..core.config import settings
+from app.verdict.engine import get_engine, VerdictEngine
+from app.verdict.session_layer import get_session, create_session, SessionLayer
+from app.core.config import settings
+
+# Module-level engine singleton
+_ENGINE = None
+
+def _get_engine():
+    global _ENGINE
+    if _ENGINE is None:
+        _ENGINE = VerdictEngine()
+    return _ENGINE
 
 # Virtual filesystem for deception
 VIRTUAL_FS: Dict[str, Dict[str, Any]] = {
@@ -117,16 +129,20 @@ class StingSSHServer(asyncssh.SSHServer):
     """SSH server that intercepts sessions for analysis"""
 
     def __init__(self):
-        self.engine = get_engine()
+        self.engine = _get_engine()
         self.sessions: Dict[str, asyncssh.SSHServerSession] = {}
 
     def connection_made(self, conn):
-        ip = conn.get_extra_info('peername')[0]
+        try:
+            ip = conn.get_extra_info('peername')[0]
+        except Exception:
+            ip = "0.0.0.0"
         session_id = str(uuid.uuid4())
         conn.session_id = session_id
-
-        # Create session in verdict engine
-        self.engine.create_session(session_id, ip, "ssh")
+        try:
+            self.engine.create_session(session_id, ip, "ssh")
+        except Exception as e:
+            print(f"[STING] create_session error: {e}")
 
         # Create session layer
         create_session(session_id, "ssh")
@@ -159,7 +175,7 @@ class StingSession(asyncssh.SSHServerSession):
         self._chan = None
         self._session_id = None
         self._username = None
-        self._engine = get_engine()
+        self._engine = _get_engine()
         self._command_buffer = ""
         self._prompt_idx = 0
 
@@ -417,31 +433,82 @@ LISTEN   0        128      127.0.0.1:5432         0.0.0.0:*
             print(f"[STING]   Reads: {len(diff['reads'])}, Writes: {len(diff['writes'])}, Captures: {len(diff['captures'])}")
 
 
+async def handle_sting_process(process: asyncssh.SSHServerProcess):
+    """Handle SSH process"""
+    engine = _get_engine()
+    try:
+        conn = process.channel.get_connection()
+        session_id = getattr(conn, "session_id", str(uuid.uuid4()))
+    except Exception:
+        session_id = str(uuid.uuid4())
+    username = process.get_extra_info("username", "unknown")
+    cmd_repr = repr(process.command)
+    print("[STING] Process session=%s user=%s cmd=%s" % (session_id[:8], username, cmd_repr))
+    if process.command:
+        process.stdout.write(_fake_cmd(process.command.strip(), session_id, engine))
+        process.exit(0)
+        return
+    process.stdout.write("Welcome to Ubuntu 22.04.3 LTS\r\n")
+    process.stdout.write(FAKE_PROMPTS[0])
+    async for line in process.stdin:
+        line = line.rstrip("\r\n")
+        if not line:
+            process.stdout.write(FAKE_PROMPTS[0])
+            continue
+        if line in ("exit", "logout", "quit"):
+            process.stdout.write("logout\r\n")
+            break
+        process.stdout.write(_fake_cmd(line, session_id, engine))
+        process.stdout.write(FAKE_PROMPTS[0])
+    process.exit(0)
+
+
+def _fake_cmd(cmd, session_id, engine):
+    import re as _re
+    parts = _re.split(r'[;&]+', cmd)
+    if len(parts) > 1:
+        return ''.join(_fake_cmd(p.strip(), session_id, engine) for p in parts if p.strip())
+    c = cmd.lower().strip()
+    if c in ("id", "whoami"):
+        return "uid=0(root) gid=0(root) groups=0(root)\r\n"
+    elif c.startswith("ls"):
+        return "bin  dev  etc  home  proc  root  tmp  usr  var\r\n"
+    elif c == "uname -a":
+        return "Linux victim 5.15.0-91-generic #101-Ubuntu x86_64 GNU/Linux\r\n"
+    elif "cat /etc/passwd" in c:
+        return VIRTUAL_FS.get("/etc/passwd", {}).get("content", "").replace("\r\n", "\r\n")
+    elif "wget" in c or "curl" in c:
+        engine.score_event(session_id, "WGET_EXECUTABLE", {"cmd": cmd})
+        return "Connecting... 200 OK\r\n"
+    elif "cat /root/secrets" in c or "id_rsa" in c:
+        engine.score_event(session_id, "CANARY_HIT", {"path": cmd})
+        return VIRTUAL_FS.get("/root/secrets.txt", {}).get("content", "").replace("\r\n", "\r\n")
+    elif c == "pwd":
+        return "/root\r\n"
+    return ""
+
+
 async def start_ssh_proxy(host: str = "0.0.0.0", port: int = 2222):
     """Start the STING SSH proxy server"""
-    # Generate temporary host key for testing
-    import os
     key_path = "/tmp/sting_host_key"
     if not os.path.exists(key_path):
         key = asyncssh.generate_private_key("ssh-rsa")
         with open(key_path, "wb") as f:
             f.write(key.export_private_key())
-
-    server = StingSSHServer()
-
-    print(f"[STING] Starting SSH proxy on {host}:{port}")
-
-    await asyncssh.create_server(
+    print("[STING] Starting SSH proxy on %s:%d" % (host, port))
+    async with asyncssh.create_server(
         lambda: StingSSHServer(),
         host,
         port,
-        server_keys=[key_path],
-        process_factory=StingSession,
+        server_host_keys=[key_path],
+        process_factory=handle_sting_process,
         allow_pty=True,
         sftp_factory=StingSFTPServer,
-    )
-
-    print(f"[STING] SSH proxy listening on {host}:{port}")
+        reuse_address=True,
+        reuse_port=True,
+    ) as server:
+        print("[STING] SSH proxy listening on %s:%d" % (host, port))
+        await asyncio.Future()
 
 
 class StingSFTPServer(asyncssh.SFTPServer):
@@ -450,7 +517,7 @@ class StingSFTPServer(asyncssh.SFTPServer):
     def __init__(self, channel):
         super().__init__(channel)
         self.session_id = channel.get_connection().session_id
-        self.engine = get_engine()
+        self.engine = _get_engine()
 
     def read(self, path: str, offset: int, size: int) -> bytes:
         """Read file from virtual FS"""
